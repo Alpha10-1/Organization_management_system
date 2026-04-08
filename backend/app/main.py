@@ -11,8 +11,10 @@ from app.routes.users import router as users_router
 
 app = FastAPI(title="Organization Management System API")
 
+# Create database tables from registered models on startup
 Base.metadata.create_all(bind=engine)
 
+# Allow local frontend apps to access the API during development
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
