@@ -49,6 +49,7 @@ export default function DashboardPage() {
     );
   }
 
+  // Build summary cards from API response once data has loaded
   const stats = summary
     ? [
         { label: "Total Clients", value: summary.stats.total_clients },
@@ -57,7 +58,7 @@ export default function DashboardPage() {
         { label: "New This Week", value: summary.stats.recent_clients },
       ]
     : [];
-    
+
   const statusCards = summary
     ? [
         { label: "Pending Clients", value: summary.stats.pending_clients },
@@ -65,6 +66,7 @@ export default function DashboardPage() {
       ]
     : [];
 
+  // Data used by the pie chart
   const chartData = summary?.status_distribution || [];
 
   return (
