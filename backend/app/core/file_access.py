@@ -3,6 +3,7 @@ from app.schemas.user import UserPublic
 
 
 def can_view_file(user: UserPublic, file_record: FileRecord) -> bool:
+    # Admins and staff can view files
     if user.role == "admin":
         return True
 
@@ -13,6 +14,7 @@ def can_view_file(user: UserPublic, file_record: FileRecord) -> bool:
 
 
 def can_delete_file(user: UserPublic, file_record: FileRecord) -> bool:
+    # Admins can delete any file; staff can only delete files they uploaded
     if user.role == "admin":
         return True
 
