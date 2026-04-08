@@ -13,6 +13,7 @@ def log_activity(
     description: str = "",
     entity_id: int | None = None,
 ):
+    # Create a new activity log entry and save it to the database
     entry = ActivityLog(
         user_email=user.email,
         user_name=user.name,
