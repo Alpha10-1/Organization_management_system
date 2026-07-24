@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.core.activity_logger import log_activity
-from app.core.deps import get_current_active_user
-from app.core.fake_db import fake_users_db
+from app.core.deps import get_current_active_user, get_user_by_email
+from app.core.rate_limit import check_login_rate_limit, reset_login_rate_limit
 from app.core.security import create_access_token, verify_password
 from app.db.session import get_db
 from app.schemas.auth import Token
@@ -13,12 +13,12 @@ from app.schemas.user import UserPublic
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
-def authenticate_user(email: str, password: str):
-    user = fake_users_db.get(email)
+def authenticate_user(db: Session, email: str, password: str):
+    user = get_user_by_email(db, email.lower())
     if not user:
         return None
 
-    if not verify_password(password, user["hashed_password"]):
+    if not verify_password(password, user.hashed_password):
         return None
 
     return user
@@ -26,10 +26,13 @@ def authenticate_user(email: str, password: str):
 
 @router.post("/login", response_model=Token)
 async def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
-    user = authenticate_user(form_data.username, form_data.password)
+    check_login_rate_limit(request, form_data.username)
+
+    user = authenticate_user(db, form_data.username, form_data.password)
 
     if not user:
         raise HTTPException(
@@ -38,12 +41,20 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    if user.disabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account has been disabled",
+        )
+
+    reset_login_rate_limit(request, form_data.username)
+
     user_public = UserPublic(
-        id=user["id"],
-        name=user["name"],
-        email=user["email"],
-        role=user["role"],
-        disabled=user["disabled"],
+        id=user.id,
+        name=user.name,
+        email=user.email,
+        role=user.role,
+        disabled=user.disabled,
     )
 
     log_activity(
@@ -57,9 +68,9 @@ async def login(
 
     access_token = create_access_token(
         data={
-            "sub": user["email"],
-            "role": user["role"],
-            "name": user["name"],
+            "sub": user.email,
+            "role": user.role,
+            "name": user.name,
         }
     )
 

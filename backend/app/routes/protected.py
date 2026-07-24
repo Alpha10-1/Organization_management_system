@@ -4,11 +4,11 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user
-from app.core.fake_db import fake_users_db
 from app.db.session import get_db
 from app.models.activity_log import ActivityLog
 from app.models.client import Client
 from app.models.file_record import FileRecord
+from app.models.user import User
 from app.schemas.user import UserPublic
 
 router = APIRouter(tags=["Protected"])
@@ -45,7 +45,7 @@ async def dashboard_summary(
         .all()
     )
 
-    staff_members = len(fake_users_db)
+    staff_members = db.query(User).count()
 
     status_distribution = [
         {"name": "Active", "value": active_clients},

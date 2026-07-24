@@ -2,7 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import app.db.base
-from app.db.session import Base, engine
+from app.core.seed import seed_demo_users
+from app.db.session import Base, SessionLocal, engine
 from app.routes.auth import router as auth_router
 from app.routes.clients import router as clients_router
 from app.routes.files import router as files_router
@@ -14,6 +15,10 @@ app = FastAPI(title="Organization Management System API")
 # Create database tables from registered models on startup
 Base.metadata.create_all(bind=engine)
 
+# Seed demo accounts on first run only (no-op if users already exist)
+with SessionLocal() as db:
+    seed_demo_users(db)
+
 # Allow local frontend apps to access the API during development
 app.add_middleware(
     CORSMiddleware,
@@ -24,6 +29,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Total-Count"],
 )
 
 app.include_router(auth_router)

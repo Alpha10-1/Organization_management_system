@@ -23,3 +23,5 @@ class UserManagementOut(BaseModel):
     email: EmailStr
     role: str
     disabled: bool
+
+    model_config = {"from_attributes": True}

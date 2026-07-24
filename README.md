@@ -129,11 +129,18 @@ cd backend
 pip install -r requirements.txt
 ```
 
-If you do not have a requirements file yet:
+### Configure environment
 
 ```bash
-pip install fastapi uvicorn sqlalchemy python-multipart passlib[bcrypt] python-jose
+cp .env.example .env
+# then set SECRET_KEY in .env, e.g.:
+python -c "import secrets; print(secrets.token_hex(32))"
 ```
+
+Without a `SECRET_KEY`, the app still runs in development (it generates a
+temporary one and warns you), but every restart invalidates existing logins.
+Setting `ENVIRONMENT=production` without a real `SECRET_KEY` will refuse to
+start at all.
 
 ### Run backend
 
@@ -209,7 +216,6 @@ Open:
 
 ## Current Limitations
 
-- Users are currently stored in memory and are not persistent after backend restart
 - Files are stored locally instead of cloud storage
 - No email verification yet
 
@@ -217,7 +223,6 @@ Open:
 
 ## Future Improvements
 
-- Move users to database
 - Cloud file storage (AWS S3 / Firebase)
 - Notifications system
 - Real-time updates (WebSockets)

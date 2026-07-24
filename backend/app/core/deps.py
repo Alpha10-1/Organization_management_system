@@ -1,19 +1,24 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jwt import InvalidTokenError
+from sqlalchemy.orm import Session
 
-from app.core.fake_db import fake_users_db
 from app.core.security import decode_access_token
+from app.db.session import get_db
+from app.models.user import User
 from app.schemas.user import UserPublic
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
-def get_user_by_email(email: str):
-    return fake_users_db.get(email)
+def get_user_by_email(db: Session, email: str) -> User | None:
+    return db.query(User).filter(User.email == email).first()
 
 
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserPublic:
+async def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> UserPublic:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -28,16 +33,16 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserPublic:
     except InvalidTokenError:
         raise credentials_exception
 
-    user = get_user_by_email(email)
+    user = get_user_by_email(db, email)
     if not user:
         raise credentials_exception
 
     return UserPublic(
-        id=user["id"],
-        name=user["name"],
-        email=user["email"],
-        role=user["role"],
-        disabled=user["disabled"],
+        id=user.id,
+        name=user.name,
+        email=user.email,
+        role=user.role,
+        disabled=user.disabled,
     )
 
 

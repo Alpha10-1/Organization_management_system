@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -11,11 +11,17 @@ from app.schemas.user import UserPublic
 
 router = APIRouter(prefix="/clients", tags=["Clients"])
 
+DEFAULT_PAGE_LIMIT = 100
+MAX_PAGE_LIMIT = 200
+
 
 @router.get("/", response_model=list[ClientOut])
 def list_clients(
+    response: Response,
     search: str | None = Query(default=None),
     status: str | None = Query(default=None),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
     db: Session = Depends(get_db),
     current_user: UserPublic = Depends(get_current_active_user),
 ):
@@ -35,7 +41,14 @@ def list_clients(
     if status:
         query = query.filter(Client.status == status)
 
-    return query.order_by(Client.created_at.desc()).all()
+    response.headers["X-Total-Count"] = str(query.count())
+
+    return (
+        query.order_by(Client.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
 
 
 @router.post("/", response_model=ClientOut)

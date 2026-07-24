@@ -41,3 +41,10 @@ temp/
 
 # misc
 *.tsbuildinfo
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
