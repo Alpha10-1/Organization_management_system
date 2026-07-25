@@ -1,4 +1,4 @@
-from datetime import datetime
+from app.core.time import utcnow
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
 from app.db.session import Base
@@ -13,7 +13,10 @@ class FileRecord(Base):
     file_path = Column(String(500), nullable=False)
     file_type = Column(String(100), nullable=True)
     file_size = Column(Integer, nullable=False, default=0)
-    client_id = Column(Integer, ForeignKey("clients.id"), nullable=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=True, index=True)
     uploaded_by_email = Column(String(255), nullable=False)
     uploaded_by_name = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
+    # Soft delete: the DB row and the file on disk are both kept so a
+    # deletion can be recovered; only visibility is toggled off.
+    deleted_at = Column(DateTime, nullable=True, index=True)

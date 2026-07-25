@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { getToken } from "@/lib/auth";
 import {
   createClient,
   deleteClient,
@@ -35,8 +34,7 @@ export default function ClientsPage() {
       setLoading(true);
       setError("");
 
-      const token = getToken();
-      const data = await fetchClients(token, {
+      const data = await fetchClients({
         search: currentSearch,
         status: currentStatus,
       });
@@ -103,16 +101,15 @@ export default function ClientsPage() {
       setSubmitting(true);
       setError("");
 
-      const token = getToken();
 
       if (editingClient) {
-        const updated = await updateClient(token, editingClient.id, form);
+        const updated = await updateClient(editingClient.id, form);
 
         if (selectedClient?.id === editingClient.id) {
           setSelectedClient(updated);
         }
       } else {
-        await createClient(token, form);
+        await createClient(form);
       }
 
       closeModal();
@@ -130,8 +127,7 @@ export default function ClientsPage() {
 
     try {
       setError("");
-      const token = getToken();
-      await deleteClient(token, clientId);
+      await deleteClient(clientId);
 
       if (selectedClient?.id === clientId) {
         setSelectedClient(null);

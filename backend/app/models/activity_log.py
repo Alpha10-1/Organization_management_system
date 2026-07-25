@@ -1,4 +1,4 @@
-from datetime import datetime
+from app.core.time import utcnow
 
 from sqlalchemy import Column, DateTime, Integer, String, Text
 
@@ -16,4 +16,4 @@ class ActivityLog(Base):
     entity_id = Column(Integer, nullable=True)
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)

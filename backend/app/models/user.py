@@ -1,4 +1,4 @@
-from datetime import datetime
+from app.core.time import utcnow
 
 from sqlalchemy import Boolean, Column, DateTime, Integer, String
 
@@ -14,5 +14,5 @@ class User(Base):
     role = Column(String(50), nullable=False, default="staff")
     disabled = Column(Boolean, nullable=False, default=False)
     hashed_password = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

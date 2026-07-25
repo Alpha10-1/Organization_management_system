@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import app.db.base
+from app.core.config import settings
 from app.core.seed import seed_demo_users
 from app.db.session import Base, SessionLocal, engine
 from app.routes.auth import router as auth_router
@@ -19,13 +20,12 @@ Base.metadata.create_all(bind=engine)
 with SessionLocal() as db:
     seed_demo_users(db)
 
-# Allow local frontend apps to access the API during development
+# Allowed origins come from CORS_ORIGINS (comma-separated) so this can be
+# tightened/loosened per deployment without a code change. Falls back to
+# localhost defaults for local development.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

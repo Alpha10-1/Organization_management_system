@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import ProtectedRoute from "@/components/auth/ProtectedRoute";
 import DashboardShell from "@/components/layout/DashboardShell";
-import { getToken } from "@/lib/auth";
 import { fetchCurrentUser } from "@/lib/api";
 
 export default function DashboardLayout({ children }) {
@@ -12,15 +11,8 @@ export default function DashboardLayout({ children }) {
 
   useEffect(() => {
     async function loadUser() {
-      const token = getToken();
-
-      if (!token) {
-        setLoadingUser(false);
-        return;
-      }
-
       try {
-        const currentUser = await fetchCurrentUser(token);
+        const currentUser = await fetchCurrentUser();
         setUser(currentUser);
       } catch (error) {
         setUser(null);

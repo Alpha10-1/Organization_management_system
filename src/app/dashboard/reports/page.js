@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { getToken } from "@/lib/auth";
 import { fetchActivityLogs } from "@/lib/api";
 
 function formatDateTime(dateString) {
@@ -20,8 +19,7 @@ export default function ReportsPage() {
     async function loadLogs() {
       try {
         setError("");
-        const token = getToken();
-        const data = await fetchActivityLogs(token);
+        const data = await fetchActivityLogs();
         setLogs(data);
       } catch (err) {
         setError(err.message || "Failed to load activity logs");

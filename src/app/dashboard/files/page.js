@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getToken } from "@/lib/auth";
 import {
   deleteFileRecord,
   downloadFileAuthenticated,
@@ -44,8 +43,7 @@ export default function FilesPage() {
   async function handleDownload(fileId) {
     try {
       setError("");
-      const token = getToken();
-      await downloadFileAuthenticated(token, fileId);
+      await downloadFileAuthenticated(fileId);
     } catch (err) {
       setError(err.message || "Failed to download file");
     }
@@ -55,7 +53,6 @@ export default function FilesPage() {
     try {
       setLoading(true);
       setError("");
-      const token = getToken();
 
       const effectiveSearch = overrides.search ?? search;
       const effectiveFileType = overrides.fileTypeFilter ?? fileTypeFilter;
@@ -63,13 +60,13 @@ export default function FilesPage() {
       const effectiveMineOnly = overrides.mineOnly ?? mineOnly;
 
       const [filesData, clientsData] = await Promise.all([
-        fetchFiles(token, {
+        fetchFiles({
           search: effectiveSearch,
           file_type: effectiveFileType,
           client_id: effectiveClientFilter,
           mine_only: effectiveMineOnly,
         }),
-        fetchClients(token),
+        fetchClients(),
       ]);
 
       setFiles(filesData);
@@ -105,8 +102,7 @@ export default function FilesPage() {
       setUploading(true);
       setError("");
 
-      const token = getToken();
-      await uploadFile(token, fileInput, clientId);
+      await uploadFile(fileInput, clientId);
 
       setFileInput(null);
       setClientId("");
@@ -125,8 +121,7 @@ export default function FilesPage() {
 
     try {
       setError("");
-      const token = getToken();
-      await deleteFileRecord(token, fileId);
+      await deleteFileRecord(fileId);
 
       if (selectedFile?.id === fileId) {
         setSelectedFile(null);
@@ -167,8 +162,7 @@ export default function FilesPage() {
         return;
       }
 
-      const token = getToken();
-      const result = await getAuthenticatedFileBlobUrl(token, file.id);
+      const result = await getAuthenticatedFileBlobUrl(file.id);
 
       setPreviewUrl(result.blobUrl);
       setPreviewType(result.contentType || file.file_type || "");
@@ -184,8 +178,7 @@ export default function FilesPage() {
   async function handleDownload(fileId) {
     try {
       setError("");
-      const token = getToken();
-      await downloadFileAuthenticated(token, fileId);
+      await downloadFileAuthenticated(fileId);
     } catch (err) {
       setError(err.message || "Failed to download file");
     }

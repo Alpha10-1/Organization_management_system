@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
-import { getToken } from "@/lib/auth";
 import { fetchDashboardSummary } from "@/lib/api";
 
 function formatDate(dateString) {
@@ -19,8 +18,7 @@ export default function DashboardPage() {
     async function loadSummary() {
       try {
         setError("");
-        const token = getToken();
-        const data = await fetchDashboardSummary(token);
+        const data = await fetchDashboardSummary();
         setSummary(data);
       } catch (error) {
         console.error("Failed to load dashboard summary:", error);

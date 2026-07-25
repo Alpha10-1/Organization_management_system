@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jwt import InvalidTokenError
 from sqlalchemy.orm import Session
@@ -8,15 +8,27 @@ from app.db.session import get_db
 from app.models.user import User
 from app.schemas.user import UserPublic
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+AUTH_COOKIE_NAME = "access_token"
+
+# auto_error=False: don't 401 just because the Authorization header is
+# missing -- a valid session might still be present via the httpOnly
+# cookie set at login. get_current_user checks both below.
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
 
 def get_user_by_email(db: Session, email: str) -> User | None:
     return db.query(User).filter(User.email == email).first()
 
 
+def _extract_token(request: Request, header_token: str | None) -> str | None:
+    if header_token:
+        return header_token
+    return request.cookies.get(AUTH_COOKIE_NAME)
+
+
 async def get_current_user(
-    token: str = Depends(oauth2_scheme),
+    request: Request,
+    header_token: str | None = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ) -> UserPublic:
     credentials_exception = HTTPException(
@@ -24,6 +36,10 @@ async def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+    token = _extract_token(request, header_token)
+    if not token:
+        raise credentials_exception
 
     try:
         payload = decode_access_token(token)

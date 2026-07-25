@@ -92,18 +92,19 @@ Organization_management_system/
 │   │   ├── schemas/
 │   │   ├── core/
 │   │   └── db/
+│   ├── alembic/           # database migrations
+│   ├── tests/             # pytest suite
 │   ├── uploads/
 │   └── main.py
 │
-├── frontend/
-│   ├── src/
-│   │   ├── app/
-│   │   │   ├── dashboard/
-│   │   │   ├── login/
-│   │   ├── lib/
-│   │   └── components/
-│   └── package.json
+├── src/                   # Next.js frontend (at repo root, not frontend/)
+│   ├── app/
+│   │   ├── dashboard/
+│   │   ├── login/
+│   ├── lib/
+│   └── components/
 │
+├── .github/workflows/     # CI: backend tests + frontend build
 └── README.md
 ```
 
@@ -127,6 +128,7 @@ cd Organization_management_system
 ```bash
 cd backend
 pip install -r requirements.txt
+# or, to also run the test suite: pip install -r requirements-dev.txt
 ```
 
 ### Configure environment
@@ -142,6 +144,22 @@ temporary one and warns you), but every restart invalidates existing logins.
 Setting `ENVIRONMENT=production` without a real `SECRET_KEY` will refuse to
 start at all.
 
+`CORS_ORIGINS`, `COOKIE_SECURE`, `UPLOAD_DIR`, and `DATABASE_URL` are also
+configurable — see the comments in `.env.example` for details. All default
+to sensible values for local development if left unset.
+
+### Apply database migrations
+
+Schema changes are managed with Alembic rather than by hand-editing the
+database.
+
+```bash
+alembic upgrade head
+```
+
+This is safe to run on a brand-new database (it creates the schema from
+scratch) or an existing one (it applies only what's missing).
+
 ### Run backend
 
 ```bash
@@ -151,13 +169,20 @@ uvicorn app.main:app --reload
 Open:
 `http://127.0.0.1:8000/docs`
 
+### Run tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
 ---
 
 ## Frontend Setup (Next.js)
 
 ```bash
-cd frontend
 npm install
+cp .env.example .env.local   # set NEXT_PUBLIC_API_URL if not using the default
 npm run dev
 ```
 
@@ -179,6 +204,7 @@ Open:
 
 ### Auth
 - `POST /auth/login`
+- `POST /auth/logout`
 - `GET /auth/me`
 
 ### Clients
@@ -206,10 +232,15 @@ Open:
 
 ## Security Features
 
-- JWT authentication for protected routes
+- JWT authentication stored in an `httpOnly`, `SameSite=Lax` cookie (not
+  readable from JS, mitigating token theft via XSS), with `Authorization:
+  Bearer` header support retained for API clients
+- Per-account and per-IP login rate limiting
 - Backend-enforced file access control
 - Role-based permissions
 - Secure file download via authenticated requests
+- Soft delete for clients and files (rows are kept for audit/recovery,
+  just hidden from normal queries)
 - Activity audit logging
 
 ---
@@ -217,7 +248,10 @@ Open:
 ## Current Limitations
 
 - Files are stored locally instead of cloud storage
-- No email verification yet
+- No email verification or password reset flow yet
+- Login rate limiting is in-memory and per-process — fine for a single
+  uvicorn worker, but needs a shared store (e.g. Redis) before running
+  with multiple workers/replicas
 
 ---
 

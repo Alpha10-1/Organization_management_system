@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { loginUser } from "@/lib/api";
-import { saveToken } from "@/lib/auth";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -27,18 +26,9 @@ export default function LoginPage() {
     setError("");
 
     try {
-        const data = await loginUser(form.email, form.password);
-
-        console.log("LOGIN SUCCESS:", data); // 👈 add this
-
-        saveToken(data.access_token);
-
-        console.log("TOKEN SAVED:", data.access_token); // 👈 add this
-
+        await loginUser(form.email, form.password);
         router.push("/dashboard");
-
     } catch (err) {
-        console.error("LOGIN ERROR:", err); // 👈 add this
         setError(err.message || "Login failed");
     } finally {
         setLoading(false);

@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { getToken, removeToken } from "@/lib/auth";
 import { fetchCurrentUser } from "@/lib/api";
 
 export default function ProtectedRoute({ children }) {
@@ -12,18 +11,10 @@ export default function ProtectedRoute({ children }) {
 
   useEffect(() => {
     async function checkAuth() {
-      const token = getToken();
-
-      if (!token) {
-        router.replace("/login");
-        return;
-      }
-
       try {
-        await fetchCurrentUser(token);
+        await fetchCurrentUser();
         setAuthorized(true);
       } catch (error) {
-        removeToken();
         router.replace("/login");
       } finally {
         setLoading(false);

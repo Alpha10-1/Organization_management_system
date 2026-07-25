@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user
 from app.core.file_access import can_delete_file, can_view_file
+from app.core.time import utcnow
 from app.db.session import get_db
 from app.models.client import Client
 from app.models.file_record import FileRecord
@@ -28,7 +29,11 @@ from app.schemas.user import UserPublic
 
 router = APIRouter(prefix="/files", tags=["Files"])
 
-UPLOAD_DIR = Path("uploads")
+# Resolve relative to the backend package (not the process's cwd) so
+# uploads land in the same place regardless of where uvicorn is launched
+# from. Override with UPLOAD_DIR to point at a different volume/mount.
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", str(_BACKEND_ROOT / "uploads")))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_PAGE_LIMIT = 100
@@ -61,7 +66,7 @@ def list_files(
     db: Session = Depends(get_db),
     current_user: UserPublic = Depends(get_current_active_user),
 ):
-    query = db.query(FileRecord)
+    query = db.query(FileRecord).filter(FileRecord.deleted_at.is_(None))
 
     if current_user.role == "staff" and mine_only:
         query = query.filter(FileRecord.uploaded_by_email == current_user.email)
@@ -122,7 +127,11 @@ async def upload_file(
         )
 
     if client_id is not None:
-        client = db.query(Client).filter(Client.id == client_id).first()
+        client = (
+            db.query(Client)
+            .filter(Client.id == client_id, Client.deleted_at.is_(None))
+            .first()
+        )
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
 
@@ -185,7 +194,11 @@ def get_file_record(
     db: Session = Depends(get_db),
     current_user: UserPublic = Depends(get_current_active_user),
 ):
-    record = db.query(FileRecord).filter(FileRecord.id == file_id).first()
+    record = (
+        db.query(FileRecord)
+        .filter(FileRecord.id == file_id, FileRecord.deleted_at.is_(None))
+        .first()
+    )
 
     if not record:
         raise HTTPException(status_code=404, detail="File not found")
@@ -202,7 +215,11 @@ def download_file(
     db: Session = Depends(get_db),
     current_user: UserPublic = Depends(get_current_active_user),
 ):
-    record = db.query(FileRecord).filter(FileRecord.id == file_id).first()
+    record = (
+        db.query(FileRecord)
+        .filter(FileRecord.id == file_id, FileRecord.deleted_at.is_(None))
+        .first()
+    )
 
     if not record:
         raise HTTPException(status_code=404, detail="File not found")
@@ -236,7 +253,11 @@ def delete_file(
     db: Session = Depends(get_db),
     current_user: UserPublic = Depends(get_current_active_user),
 ):
-    record = db.query(FileRecord).filter(FileRecord.id == file_id).first()
+    record = (
+        db.query(FileRecord)
+        .filter(FileRecord.id == file_id, FileRecord.deleted_at.is_(None))
+        .first()
+    )
 
     if not record:
         raise HTTPException(status_code=404, detail="File not found")
@@ -244,14 +265,12 @@ def delete_file(
     if not can_delete_file(current_user, record):
         raise HTTPException(status_code=403, detail="You do not have permission to delete this file")
 
-    stored_path = record.file_path
     original_name = record.original_name
 
-    db.delete(record)
+    # Soft delete: the row and the file on disk are both kept for
+    # recovery/audit; deletion just hides the record from normal queries.
+    record.deleted_at = utcnow()
     db.commit()
-
-    if os.path.exists(stored_path):
-        os.remove(stored_path)
 
     log_activity(
         db=db,

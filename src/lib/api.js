@@ -1,4 +1,4 @@
-const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
 async function parseResponse(response) {
   const contentType = response.headers.get("content-type") || "";
@@ -11,12 +11,12 @@ async function parseResponse(response) {
   return { detail: text || "Unexpected server response" };
 }
 
-export async function updateClient(token, clientId, payload) {
+export async function updateClient(clientId, payload) {
   const response = await fetch(`${API_BASE_URL}/clients/${clientId}`, {
     method: "PUT",
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(payload),
   });
@@ -30,12 +30,10 @@ export async function updateClient(token, clientId, payload) {
   return data;
 }
 
-export async function fetchActivityLogs(token) {
+export async function fetchActivityLogs() {
   const response = await fetch(`${API_BASE_URL}/activity-logs`, {
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    credentials: "include",
   });
 
   const data = await parseResponse(response);
@@ -54,6 +52,7 @@ export async function loginUser(email, password) {
 
   const response = await fetch(`${API_BASE_URL}/auth/login`, {
     method: "POST",
+    credentials: "include",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
     },
@@ -69,12 +68,19 @@ export async function loginUser(email, password) {
   return data;
 }
 
-export async function fetchCurrentUser(token) {
+export async function logoutUser() {
+  const response = await fetch(`${API_BASE_URL}/auth/logout`, {
+    method: "POST",
+    credentials: "include",
+  });
+
+  return parseResponse(response);
+}
+
+export async function fetchCurrentUser() {
   const response = await fetch(`${API_BASE_URL}/auth/me`, {
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    credentials: "include",
   });
 
   const data = await parseResponse(response);
@@ -86,12 +92,10 @@ export async function fetchCurrentUser(token) {
   return data;
 }
 
-export async function fetchDashboardSummary(token) {
+export async function fetchDashboardSummary() {
   const response = await fetch(`${API_BASE_URL}/dashboard-summary`, {
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    credentials: "include",
   });
 
   const data = await parseResponse(response);
@@ -103,7 +107,7 @@ export async function fetchDashboardSummary(token) {
   return data;
 }
 
-export async function fetchClients(token, params = {}) {
+export async function fetchClients(params = {}) {
   const searchParams = new URLSearchParams();
 
   if (params.search) searchParams.append("search", params.search);
@@ -116,9 +120,7 @@ export async function fetchClients(token, params = {}) {
 
   const response = await fetch(url, {
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    credentials: "include",
   });
 
   const data = await parseResponse(response);
@@ -130,12 +132,12 @@ export async function fetchClients(token, params = {}) {
   return data;
 }
 
-export async function createClient(token, payload) {
+export async function createClient(payload) {
   const response = await fetch(`${API_BASE_URL}/clients/`, {
     method: "POST",
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(payload),
   });
@@ -149,12 +151,10 @@ export async function createClient(token, payload) {
   return data;
 }
 
-export async function fetchUsers(token) {
+export async function fetchUsers() {
   const response = await fetch(`${API_BASE_URL}/users/`, {
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    credentials: "include",
   });
 
   const data = await parseResponse(response);
@@ -166,12 +166,12 @@ export async function fetchUsers(token) {
   return data;
 }
 
-export async function createUser(token, payload) {
+export async function createUser(payload) {
   const response = await fetch(`${API_BASE_URL}/users/`, {
     method: "POST",
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(payload),
   });
@@ -185,12 +185,12 @@ export async function createUser(token, payload) {
   return data;
 }
 
-export async function updateUserRole(token, email, role) {
+export async function updateUserRole(email, role) {
   const response = await fetch(`${API_BASE_URL}/users/${encodeURIComponent(email)}/role`, {
     method: "PATCH",
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ role }),
   });
@@ -204,12 +204,12 @@ export async function updateUserRole(token, email, role) {
   return data;
 }
 
-export async function updateUserStatus(token, email, disabled) {
+export async function updateUserStatus(email, disabled) {
   const response = await fetch(`${API_BASE_URL}/users/${encodeURIComponent(email)}/status`, {
     method: "PATCH",
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ disabled }),
   });
@@ -223,7 +223,7 @@ export async function updateUserStatus(token, email, disabled) {
   return data;
 }
 
-export async function fetchFiles(token, params = {}) {
+export async function fetchFiles(params = {}) {
   const searchParams = new URLSearchParams();
 
   if (params.search) searchParams.append("search", params.search);
@@ -242,9 +242,7 @@ export async function fetchFiles(token, params = {}) {
 
   const response = await fetch(url, {
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    credentials: "include",
   });
 
   const data = await parseResponse(response);
@@ -257,7 +255,7 @@ export async function fetchFiles(token, params = {}) {
 }
 
 
-export async function uploadFile(token, file, clientId = "") {
+export async function uploadFile(file, clientId = "") {
   const formData = new FormData();
   formData.append("file", file);
 
@@ -267,9 +265,7 @@ export async function uploadFile(token, file, clientId = "") {
 
   const response = await fetch(`${API_BASE_URL}/files/upload`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    credentials: "include",
     body: formData,
   });
 
@@ -282,12 +278,10 @@ export async function uploadFile(token, file, clientId = "") {
   return data;
 }
 
-export async function deleteFileRecord(token, fileId) {
+export async function deleteFileRecord(fileId) {
   const response = await fetch(`${API_BASE_URL}/files/${fileId}`, {
     method: "DELETE",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    credentials: "include",
   });
 
   const data = await parseResponse(response);
@@ -299,12 +293,10 @@ export async function deleteFileRecord(token, fileId) {
   return data;
 }
 
-export async function deleteClient(token, clientId) {
+export async function deleteClient(clientId) {
   const response = await fetch(`${API_BASE_URL}/clients/${clientId}`, {
     method: "DELETE",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    credentials: "include",
   });
 
   const data = await parseResponse(response);
@@ -316,12 +308,10 @@ export async function deleteClient(token, clientId) {
   return data;
 }
 
-export async function fetchFileRecord(token, fileId) {
+export async function fetchFileRecord(fileId) {
   const response = await fetch(`${API_BASE_URL}/files/${fileId}`, {
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    credentials: "include",
   });
 
   const data = await parseResponse(response);
@@ -333,12 +323,10 @@ export async function fetchFileRecord(token, fileId) {
   return data;
 }
 
-export async function downloadFileAuthenticated(token, fileId) {
+export async function downloadFileAuthenticated(fileId) {
   const response = await fetch(`${API_BASE_URL}/files/${fileId}/download`, {
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    credentials: "include",
   });
 
   if (!response.ok) {
@@ -372,12 +360,10 @@ export async function downloadFileAuthenticated(token, fileId) {
   return { success: true, filename };
 }
 
-export async function getAuthenticatedFileBlobUrl(token, fileId) {
+export async function getAuthenticatedFileBlobUrl(fileId) {
   const response = await fetch(`${API_BASE_URL}/files/${fileId}/download`, {
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    credentials: "include",
   });
 
   if (!response.ok) {

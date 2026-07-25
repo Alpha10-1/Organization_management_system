@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getToken } from "@/lib/auth";
 import {
   createUser,
+  fetchCurrentUser,
   fetchUsers,
   updateUserRole,
   updateUserStatus,
@@ -29,8 +29,7 @@ export default function UsersPage() {
     try {
       setLoading(true);
       setError("");
-      const token = getToken();
-      const data = await fetchUsers(token);
+      const data = await fetchUsers();
       setUsers(data);
     } catch (err) {
       setError(err.message || "Failed to load users");
@@ -42,13 +41,12 @@ export default function UsersPage() {
   useEffect(() => {
     async function init() {
         try {
-        const token = getToken();
-        const me = await fetchCurrentUser(token);
+        const me = await fetchCurrentUser();
         setCurrentUserRole(me.role);
         if (me.role !== "admin") {
             setError("You do not have permission to access this page.");
         } else {
-            const data = await fetchUsers(token);
+            const data = await fetchUsers();
             setUsers(data);
         }
         } catch (err) {
@@ -78,8 +76,7 @@ export default function UsersPage() {
     try {
       setSaving(true);
       setError("");
-      const token = getToken();
-      await createUser(token, form);
+      await createUser(form);
       setForm(initialForm);
       setShowModal(false);
       await loadUsers();
@@ -93,8 +90,7 @@ export default function UsersPage() {
   async function handleRoleChange(email, role) {
     try {
       setError("");
-      const token = getToken();
-      await updateUserRole(token, email, role);
+      await updateUserRole(email, role);
       await loadUsers();
     } catch (err) {
       setError(err.message || "Failed to update role");
@@ -104,8 +100,7 @@ export default function UsersPage() {
   async function handleStatusToggle(email, disabled) {
     try {
       setError("");
-      const token = getToken();
-      await updateUserStatus(token, email, disabled);
+      await updateUserStatus(email, disabled);
       await loadUsers();
     } catch (err) {
       setError(err.message || "Failed to update status");

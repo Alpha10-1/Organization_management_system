@@ -1,14 +1,17 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { removeToken } from "@/lib/auth";
+import { logoutUser } from "@/lib/api";
 
 export default function AppHeader({ user }) {
   const router = useRouter();
 
-  function handleLogout() {
-    removeToken();
-    router.replace("/login");
+  async function handleLogout() {
+    try {
+      await logoutUser();
+    } finally {
+      router.replace("/login");
+    }
   }
 
   return (

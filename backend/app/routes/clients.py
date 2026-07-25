@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user
+from app.core.time import utcnow
 from app.db.session import get_db
 from app.models.client import Client
 from app.schemas.client import ClientCreate, ClientOut, ClientUpdate
@@ -25,7 +26,7 @@ def list_clients(
     db: Session = Depends(get_db),
     current_user: UserPublic = Depends(get_current_active_user),
 ):
-    query = db.query(Client)
+    query = db.query(Client).filter(Client.deleted_at.is_(None))
 
     if search:
         search_term = f"%{search}%"
@@ -81,7 +82,11 @@ def get_client(
     db: Session = Depends(get_db),
     current_user: UserPublic = Depends(get_current_active_user),
 ):
-    client = db.query(Client).filter(Client.id == client_id).first()
+    client = (
+        db.query(Client)
+        .filter(Client.id == client_id, Client.deleted_at.is_(None))
+        .first()
+    )
 
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -96,7 +101,11 @@ def update_client(
     db: Session = Depends(get_db),
     current_user: UserPublic = Depends(get_current_active_user),
 ):
-    client = db.query(Client).filter(Client.id == client_id).first()
+    client = (
+        db.query(Client)
+        .filter(Client.id == client_id, Client.deleted_at.is_(None))
+        .first()
+    )
 
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -128,14 +137,20 @@ def delete_client(
     db: Session = Depends(get_db),
     current_user: UserPublic = Depends(get_current_active_user),
 ):
-    client = db.query(Client).filter(Client.id == client_id).first()
+    client = (
+        db.query(Client)
+        .filter(Client.id == client_id, Client.deleted_at.is_(None))
+        .first()
+    )
 
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
     client_name = f"{client.first_name} {client.last_name}"
 
-    db.delete(client)
+    # Soft delete: keep the row (and any files/activity referencing it)
+    # for audit/recovery, just hide it from normal queries.
+    client.deleted_at = utcnow()
     db.commit()
 
     log_activity(

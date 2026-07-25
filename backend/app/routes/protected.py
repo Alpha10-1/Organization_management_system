@@ -1,9 +1,10 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user
+from app.core.time import utcnow
 from app.db.session import get_db
 from app.models.activity_log import ActivityLog
 from app.models.client import Client
@@ -19,21 +20,23 @@ async def dashboard_summary(
     db: Session = Depends(get_db),
     current_user: UserPublic = Depends(get_current_active_user),
 ):
-    total_clients = db.query(Client).count()
-    total_files = db.query(FileRecord).count()
+    active_clients_query = db.query(Client).filter(Client.deleted_at.is_(None))
+    active_files_query = db.query(FileRecord).filter(FileRecord.deleted_at.is_(None))
 
-    active_clients = db.query(Client).filter(Client.status == "Active").count()
-    pending_clients = db.query(Client).filter(Client.status == "Pending").count()
-    closed_clients = db.query(Client).filter(Client.status == "Closed").count()
+    total_clients = active_clients_query.count()
+    total_files = active_files_query.count()
 
-    seven_days_ago = datetime.utcnow() - timedelta(days=7)
-    recent_clients_count = (
-        db.query(Client).filter(Client.created_at >= seven_days_ago).count()
-    )
+    active_clients = active_clients_query.filter(Client.status == "Active").count()
+    pending_clients = active_clients_query.filter(Client.status == "Pending").count()
+    closed_clients = active_clients_query.filter(Client.status == "Closed").count()
+
+    seven_days_ago = utcnow() - timedelta(days=7)
+    recent_clients_count = active_clients_query.filter(
+        Client.created_at >= seven_days_ago
+    ).count()
 
     recent_clients = (
-        db.query(Client)
-        .order_by(Client.created_at.desc())
+        active_clients_query.order_by(Client.created_at.desc())
         .limit(5)
         .all()
     )
