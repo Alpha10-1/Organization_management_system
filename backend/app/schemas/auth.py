@@ -9,3 +9,16 @@ class Token(BaseModel):
 class TokenData(BaseModel):
     sub: str | None = None
     role: str | None = None
+
+
+class PasswordResetRequest(BaseModel):
+    email: str
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str
+    new_password: str
+
+
+class EmailVerificationConfirm(BaseModel):
+    token: str

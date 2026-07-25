@@ -7,6 +7,10 @@ import {
   fetchUsers,
   updateUserRole,
   updateUserStatus,
+  fetchDepartments,
+  createDepartment,
+  deleteDepartment,
+  updateUserDepartment,
 } from "@/lib/api";
 
 const initialForm = {
@@ -14,6 +18,7 @@ const initialForm = {
   email: "",
   password: "",
   role: "staff",
+  department_id: "",
 };
 
 export default function UsersPage() {
@@ -24,6 +29,10 @@ export default function UsersPage() {
   const [error, setError] = useState("");
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState(initialForm);
+
+  const [departments, setDepartments] = useState([]);
+  const [newDeptName, setNewDeptName] = useState("");
+  const [deptSaving, setDeptSaving] = useState(false);
 
   async function loadUsers() {
     try {
@@ -48,6 +57,7 @@ export default function UsersPage() {
         } else {
             const data = await fetchUsers();
             setUsers(data);
+            fetchDepartments().then(setDepartments).catch(() => setDepartments([]));
         }
         } catch (err) {
         setError(err.message || "Failed to load users");
@@ -63,6 +73,46 @@ export default function UsersPage() {
     loadUsers();
   }, []);
 
+  async function handleCreateDepartment(e) {
+    e.preventDefault();
+    if (!newDeptName.trim()) return;
+    try {
+      setDeptSaving(true);
+      setError("");
+      await createDepartment({ name: newDeptName.trim() });
+      setNewDeptName("");
+      const updated = await fetchDepartments();
+      setDepartments(updated);
+    } catch (err) {
+      setError(err.message || "Failed to create department");
+    } finally {
+      setDeptSaving(false);
+    }
+  }
+
+  async function handleDeleteDepartment(id) {
+    const confirmed = window.confirm("Delete this department? Users/clients in it become unassigned.");
+    if (!confirmed) return;
+    try {
+      setError("");
+      await deleteDepartment(id);
+      setDepartments((prev) => prev.filter((d) => d.id !== id));
+      await loadUsers();
+    } catch (err) {
+      setError(err.message || "Failed to delete department");
+    }
+  }
+
+  async function handleUserDepartmentChange(email, departmentId) {
+    try {
+      setError("");
+      await updateUserDepartment(email, departmentId ? Number(departmentId) : null);
+      await loadUsers();
+    } catch (err) {
+      setError(err.message || "Failed to update department");
+    }
+  }
+
   function handleInputChange(e) {
     setForm((prev) => ({
       ...prev,
@@ -76,7 +126,10 @@ export default function UsersPage() {
     try {
       setSaving(true);
       setError("");
-      await createUser(form);
+      await createUser({
+        ...form,
+        department_id: form.department_id ? Number(form.department_id) : null,
+      });
       setForm(initialForm);
       setShowModal(false);
       await loadUsers();
@@ -132,6 +185,52 @@ export default function UsersPage() {
       ) : null}
 
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h2 className="text-lg font-semibold text-slate-900">Departments</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          Organize staff and clients by team (e.g. Sales, Support, Ops).
+        </p>
+
+        <form onSubmit={handleCreateDepartment} className="mt-4 flex gap-2">
+          <input
+            type="text"
+            value={newDeptName}
+            onChange={(e) => setNewDeptName(e.target.value)}
+            placeholder="New department name"
+            className="flex-1 max-w-xs rounded-2xl border border-slate-300 px-4 py-2 text-sm outline-none focus:border-slate-900"
+          />
+          <button
+            type="submit"
+            disabled={deptSaving}
+            className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-70"
+          >
+            {deptSaving ? "Adding..." : "Add"}
+          </button>
+        </form>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {departments.length === 0 ? (
+            <span className="text-sm text-slate-400">No departments yet.</span>
+          ) : (
+            departments.map((d) => (
+              <span
+                key={d.id}
+                className="flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-700"
+              >
+                {d.name}
+                <button
+                  onClick={() => handleDeleteDepartment(d.id)}
+                  className="text-xs text-slate-400 hover:text-rose-500"
+                  aria-label={`Delete ${d.name}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[850px] border-separate border-spacing-y-3">
             <thead>
@@ -139,6 +238,7 @@ export default function UsersPage() {
                 <th className="pb-2">Name</th>
                 <th className="pb-2">Email</th>
                 <th className="pb-2">Role</th>
+                <th className="pb-2">Department</th>
                 <th className="pb-2">Status</th>
                 <th className="pb-2">Actions</th>
               </tr>
@@ -146,13 +246,13 @@ export default function UsersPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-sm text-slate-500">
+                  <td colSpan={6} className="py-8 text-center text-sm text-slate-500">
                     Loading users...
                   </td>
                 </tr>
               ) : users.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-sm text-slate-500">
+                  <td colSpan={6} className="py-8 text-center text-sm text-slate-500">
                     No users found.
                   </td>
                 </tr>
@@ -171,6 +271,20 @@ export default function UsersPage() {
                       >
                         <option value="staff">staff</option>
                         <option value="admin">admin</option>
+                      </select>
+                    </td>
+                    <td className="px-4 py-4">
+                      <select
+                        value={user.department_id ?? ""}
+                        onChange={(e) => handleUserDepartmentChange(user.email, e.target.value)}
+                        className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
+                      >
+                        <option value="">None</option>
+                        {departments.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.name}
+                          </option>
+                        ))}
                       </select>
                     </td>
                     <td className="px-4 py-4">
@@ -273,6 +387,25 @@ export default function UsersPage() {
                 >
                   <option value="staff">staff</option>
                   <option value="admin">admin</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-700">
+                  Department
+                </label>
+                <select
+                  name="department_id"
+                  value={form.department_id}
+                  onChange={handleInputChange}
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                >
+                  <option value="">None</option>
+                  {departments.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}
+                    </option>
+                  ))}
                 </select>
               </div>
 

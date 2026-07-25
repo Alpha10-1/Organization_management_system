@@ -15,5 +15,7 @@ class FileRecordOut(BaseModel):
     uploaded_by_email: str
     uploaded_by_name: str
     created_at: datetime
+    version: int = 1
+    previous_version_id: Optional[int] = None
 
     model_config = {"from_attributes": True}

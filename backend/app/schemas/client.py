@@ -10,6 +10,7 @@ class ClientBase(BaseModel):
     email: Optional[EmailStr] = None
     status: str = "Active"
     notes: Optional[str] = None
+    department_id: Optional[int] = None
 
 
 class ClientCreate(ClientBase):
@@ -23,6 +24,7 @@ class ClientUpdate(BaseModel):
     email: Optional[EmailStr] = None
     status: Optional[str] = None
     notes: Optional[str] = None
+    department_id: Optional[int] = None
 
 
 class ClientOut(ClientBase):
@@ -31,3 +33,8 @@ class ClientOut(ClientBase):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ClientBulkStatusUpdate(BaseModel):
+    client_ids: list[int]
+    status: str

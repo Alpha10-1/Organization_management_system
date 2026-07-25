@@ -4,6 +4,7 @@ import {
   FolderLock,
   BarChart3,
   ShieldCheck,
+  ListChecks,
 } from "lucide-react";
 
 export const navItems = [
@@ -17,6 +18,12 @@ export const navItems = [
     label: "Clients",
     href: "/dashboard/clients",
     icon: Users,
+    roles: ["admin", "staff"],
+  },
+  {
+    label: "Tasks",
+    href: "/dashboard/tasks",
+    icon: ListChecks,
     roles: ["admin", "staff"],
   },
   {

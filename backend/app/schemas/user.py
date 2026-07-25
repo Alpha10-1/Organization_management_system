@@ -7,6 +7,7 @@ class UserBase(BaseModel):
     email: EmailStr
     role: str
     disabled: bool = False
+    is_verified: bool = False
 
 
 class UserPublic(UserBase):

@@ -1,12 +1,28 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { fetchActivityLogs } from "@/lib/api";
+import { Download } from "lucide-react";
+import {
+  fetchActivityLogs,
+  exportClientsCsv,
+  exportClientsPdf,
+  exportFilesCsv,
+  exportTasksCsv,
+  exportActivityLogsCsv,
+} from "@/lib/api";
 
 function formatDateTime(dateString) {
   const date = new Date(dateString);
   return date.toLocaleString();
 }
+
+const EXPORTS = [
+  { label: "Clients (CSV)", handler: exportClientsCsv },
+  { label: "Clients (PDF)", handler: exportClientsPdf },
+  { label: "Files (CSV)", handler: exportFilesCsv },
+  { label: "Tasks (CSV)", handler: exportTasksCsv },
+  { label: "Activity Logs (CSV)", handler: exportActivityLogsCsv },
+];
 
 export default function ReportsPage() {
   const [logs, setLogs] = useState([]);
@@ -14,6 +30,19 @@ export default function ReportsPage() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [actionFilter, setActionFilter] = useState("All");
+  const [exporting, setExporting] = useState("");
+
+  async function handleExport(item) {
+    try {
+      setExporting(item.label);
+      setError("");
+      await item.handler();
+    } catch (err) {
+      setError(err.message || `Failed to export ${item.label}`);
+    } finally {
+      setExporting("");
+    }
+  }
 
   useEffect(() => {
     async function loadLogs() {
@@ -74,6 +103,20 @@ export default function ReportsPage() {
         <p className="mt-1 text-sm text-slate-500">
           Monitor system events, track client actions, and review user activity.
         </p>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {EXPORTS.map((item) => (
+            <button
+              key={item.label}
+              onClick={() => handleExport(item)}
+              disabled={exporting === item.label}
+              className="flex items-center gap-2 rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:opacity-60"
+            >
+              <Download className="h-4 w-4" />
+              {exporting === item.label ? "Exporting..." : item.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">

@@ -1,6 +1,6 @@
 from app.core.time import utcnow
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
 
 from app.db.session import Base
 
@@ -14,5 +14,16 @@ class User(Base):
     role = Column(String(50), nullable=False, default="staff")
     disabled = Column(Boolean, nullable=False, default=False)
     hashed_password = Column(String(255), nullable=False)
+    department_id = Column(Integer, ForeignKey("departments.id"), nullable=True, index=True)
+
+    # Email verification
+    is_verified = Column(Boolean, nullable=False, default=False)
+    verification_token = Column(String(255), nullable=True, index=True)
+    verification_token_expires = Column(DateTime, nullable=True)
+
+    # Password reset
+    reset_token = Column(String(255), nullable=True, index=True)
+    reset_token_expires = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

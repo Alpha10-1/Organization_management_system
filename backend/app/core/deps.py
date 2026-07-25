@@ -59,6 +59,7 @@ async def get_current_user(
         email=user.email,
         role=user.role,
         disabled=user.disabled,
+        is_verified=user.is_verified,
     )
 
 

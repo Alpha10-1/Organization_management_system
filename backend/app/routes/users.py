@@ -9,6 +9,7 @@ from app.models.user import User
 from app.schemas.user import UserPublic
 from app.schemas.user_management import (
     UserCreate,
+    UserDepartmentUpdate,
     UserManagementOut,
     UserRoleUpdate,
     UserStatusUpdate,
@@ -79,6 +80,7 @@ def create_user(
         role=payload.role,
         disabled=False,
         hashed_password=get_password_hash(payload.password),
+        department_id=payload.department_id,
     )
 
     db.add(user)
@@ -122,6 +124,9 @@ def update_user(
 
     if payload.disabled is not None:
         target.disabled = payload.disabled
+
+    if payload.department_id is not None:
+        target.department_id = payload.department_id
 
     db.commit()
     db.refresh(target)
@@ -201,6 +206,36 @@ def update_user_status(
         entity_id=target.id,
         title=f"User status changed: {target.name}",
         description=f"Set disabled={target.disabled} for '{target.email}'.",
+    )
+
+    return target
+
+
+@router.patch("/{email}/department", response_model=UserManagementOut)
+def update_user_department(
+    email: str,
+    payload: UserDepartmentUpdate,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(require_role("admin")),
+):
+    target = get_user_by_email(db, email.lower())
+
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    target.department_id = payload.department_id
+
+    db.commit()
+    db.refresh(target)
+
+    log_activity(
+        db=db,
+        user=current_user,
+        action="user_department_updated",
+        entity_type="user",
+        entity_id=target.id,
+        title=f"Department changed: {target.name}",
+        description=f"Updated department for '{target.email}'.",
     )
 
     return target

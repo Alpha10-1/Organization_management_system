@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime
+from sqlalchemy import Column, ForeignKey, Integer, String, Text, DateTime
 from app.core.time import utcnow
 
 from app.db.session import Base
@@ -14,6 +14,7 @@ class Client(Base):
     email = Column(String(255), nullable=True, index=True)
     status = Column(String(50), nullable=False, default="Active", index=True)
     notes = Column(Text, nullable=True)
+    department_id = Column(Integer, ForeignKey("departments.id"), nullable=True, index=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
     # Soft delete: deleted clients are kept for audit/recovery purposes and

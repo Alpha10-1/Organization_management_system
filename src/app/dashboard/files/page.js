@@ -8,6 +8,10 @@ import {
   fetchFiles,
   getAuthenticatedFileBlobUrl,
   uploadFile,
+  bulkDeleteFiles,
+  bulkDownloadFiles,
+  uploadFileVersion,
+  fetchFileVersions,
 } from "@/lib/api";
 
 function formatFileSize(bytes) {
@@ -39,6 +43,13 @@ export default function FilesPage() {
   const [fileTypeFilter, setFileTypeFilter] = useState("All");
   const [clientFilter, setClientFilter] = useState("");
   const [mineOnly, setMineOnly] = useState(false);
+
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [versionInput, setVersionInput] = useState(null);
+  const [versionUploading, setVersionUploading] = useState(false);
+  const [versions, setVersions] = useState([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
 
   async function handleDownload(fileId) {
     try {
@@ -89,6 +100,77 @@ export default function FilesPage() {
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    if (!selectedFile) {
+      setVersions([]);
+      return;
+    }
+    setVersionsLoading(true);
+    fetchFileVersions(selectedFile.id)
+      .then(setVersions)
+      .catch(() => setVersions([]))
+      .finally(() => setVersionsLoading(false));
+  }, [selectedFile]);
+
+  function toggleSelected(fileId) {
+    setSelectedIds((prev) =>
+      prev.includes(fileId) ? prev.filter((id) => id !== fileId) : [...prev, fileId]
+    );
+  }
+
+  function toggleSelectAll() {
+    setSelectedIds(selectedIds.length === files.length ? [] : files.map((f) => f.id));
+  }
+
+  async function handleBulkDelete() {
+    if (selectedIds.length === 0) return;
+    const confirmed = window.confirm(`Delete ${selectedIds.length} file(s)?`);
+    if (!confirmed) return;
+
+    try {
+      setBulkBusy(true);
+      setError("");
+      await bulkDeleteFiles(selectedIds);
+      setSelectedIds([]);
+      await loadData();
+    } catch (err) {
+      setError(err.message || "Failed to bulk delete files");
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function handleBulkDownload() {
+    if (selectedIds.length === 0) return;
+    try {
+      setBulkBusy(true);
+      setError("");
+      await bulkDownloadFiles(selectedIds);
+    } catch (err) {
+      setError(err.message || "Failed to bulk download files");
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function handleUploadNewVersion(e) {
+    e.preventDefault();
+    if (!versionInput || !selectedFile) return;
+
+    try {
+      setVersionUploading(true);
+      setError("");
+      const updated = await uploadFileVersion(versionInput, selectedFile.id, selectedFile.client_id || "");
+      setVersionInput(null);
+      setSelectedFile(updated);
+      await loadData();
+    } catch (err) {
+      setError(err.message || "Failed to upload new version");
+    } finally {
+      setVersionUploading(false);
+    }
+  }
 
   async function handleUpload(e) {
     e.preventDefault();
@@ -292,10 +374,45 @@ export default function FilesPage() {
 
       <div className="grid gap-6 xl:grid-cols-[1.4fr_0.9fr]">
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          {selectedIds.length > 0 ? (
+            <div className="mb-4 flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <span className="text-sm font-semibold text-slate-700">
+                {selectedIds.length} selected
+              </span>
+              <button
+                onClick={handleBulkDownload}
+                disabled={bulkBusy}
+                className="rounded-xl border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+              >
+                Download as .zip
+              </button>
+              <button
+                onClick={handleBulkDelete}
+                disabled={bulkBusy}
+                className="rounded-xl border border-rose-300 px-3 py-2 text-sm font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-60"
+              >
+                Delete
+              </button>
+              <button
+                onClick={() => setSelectedIds([])}
+                className="text-sm font-semibold text-slate-500 hover:underline"
+              >
+                Clear
+              </button>
+            </div>
+          ) : null}
+
           <div className="overflow-x-auto">
             <table className="w-full min-w-[860px] border-separate border-spacing-y-3">
               <thead>
                 <tr className="text-left text-sm text-slate-500">
+                  <th className="pb-2">
+                    <input
+                      type="checkbox"
+                      checked={files.length > 0 && selectedIds.length === files.length}
+                      onChange={toggleSelectAll}
+                    />
+                  </th>
                   <th className="pb-2">File Name</th>
                   <th className="pb-2">Type</th>
                   <th className="pb-2">Size</th>
@@ -307,21 +424,33 @@ export default function FilesPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={6} className="py-8 text-center text-sm text-slate-500">
+                    <td colSpan={7} className="py-8 text-center text-sm text-slate-500">
                       Loading files...
                     </td>
                   </tr>
                 ) : files.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="py-8 text-center text-sm text-slate-500">
+                    <td colSpan={7} className="py-8 text-center text-sm text-slate-500">
                       No files found.
                     </td>
                   </tr>
                 ) : (
                   files.map((file) => (
                     <tr key={file.id} className="bg-slate-50">
-                      <td className="rounded-l-2xl px-4 py-4 font-medium text-slate-900">
+                      <td className="rounded-l-2xl px-4 py-4">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(file.id)}
+                          onChange={() => toggleSelected(file.id)}
+                        />
+                      </td>
+                      <td className="px-4 py-4 font-medium text-slate-900">
                         {file.original_name}
+                        {file.version > 1 && (
+                          <span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                            v{file.version}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-4 text-slate-700">
                         {file.file_type || "-"}
@@ -428,6 +557,58 @@ export default function FilesPage() {
                 >
                   Download File
                 </button>
+              </div>
+
+              <div className="border-t border-slate-100 pt-4">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Upload New Version
+                </p>
+                <form onSubmit={handleUploadNewVersion} className="flex gap-2">
+                  <input
+                    type="file"
+                    onChange={(e) => setVersionInput(e.target.files?.[0] || null)}
+                    className="flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
+                  />
+                  <button
+                    type="submit"
+                    disabled={versionUploading || !versionInput}
+                    className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                  >
+                    {versionUploading ? "Uploading..." : "Replace"}
+                  </button>
+                </form>
+
+                <div className="mt-3 space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Version History
+                  </p>
+                  {versionsLoading ? (
+                    <p className="text-sm text-slate-400">Loading versions...</p>
+                  ) : versions.length <= 1 ? (
+                    <p className="text-sm text-slate-400">Only one version on file.</p>
+                  ) : (
+                    versions.map((v) => (
+                      <div
+                        key={v.id}
+                        className={`flex items-center justify-between rounded-xl border px-3 py-2 text-sm ${
+                          v.id === selectedFile.id
+                            ? "border-slate-900 bg-slate-50"
+                            : "border-slate-200"
+                        }`}
+                      >
+                        <span>
+                          v{v.version} · {formatDate(v.created_at)}
+                        </span>
+                        <button
+                          onClick={() => handleDownload(v.id)}
+                          className="text-xs font-semibold text-blue-600 hover:underline"
+                        >
+                          Download
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
 
               <div className="pt-2">

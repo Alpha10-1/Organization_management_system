@@ -1,5 +1,7 @@
+import io
 import os
 import uuid
+import zipfile
 from pathlib import Path
 
 from fastapi import (
@@ -13,7 +15,8 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -28,6 +31,10 @@ from app.schemas.file_record import FileRecordOut
 from app.schemas.user import UserPublic
 
 router = APIRouter(prefix="/files", tags=["Files"])
+
+
+class BulkFileIds(BaseModel):
+    file_ids: list[int]
 
 # Resolve relative to the backend package (not the process's cwd) so
 # uploads land in the same place regardless of where uvicorn is launched
@@ -110,11 +117,29 @@ def list_files(
 async def upload_file(
     file: UploadFile = File(...),
     client_id: int | None = Form(default=None),
+    replaces_file_id: int | None = Form(default=None),
     db: Session = Depends(get_db),
     current_user: UserPublic = Depends(get_current_active_user),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="A filename is required")
+
+    previous_version = None
+    if replaces_file_id is not None:
+        previous_version = (
+            db.query(FileRecord)
+            .filter(FileRecord.id == replaces_file_id, FileRecord.deleted_at.is_(None))
+            .first()
+        )
+        if not previous_version:
+            raise HTTPException(status_code=404, detail="File to replace not found")
+        if not can_delete_file(current_user, previous_version):
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have permission to upload a new version of this file",
+            )
+        if client_id is None:
+            client_id = previous_version.client_id
 
     extension = Path(file.filename).suffix.lower()
     if extension not in ALLOWED_UPLOAD_EXTENSIONS:
@@ -169,9 +194,18 @@ async def upload_file(
         client_id=client_id,
         uploaded_by_email=current_user.email,
         uploaded_by_name=current_user.name,
+        version=(previous_version.version + 1) if previous_version else 1,
+        previous_version_id=previous_version.id if previous_version else None,
     )
 
     db.add(record)
+
+    if previous_version:
+        # The old version is kept on disk and in the DB for history, but
+        # hidden from the normal (current-files) list -- get_file_versions
+        # below can still walk the chain.
+        previous_version.deleted_at = utcnow()
+
     db.commit()
     db.refresh(record)
 
@@ -182,7 +216,11 @@ async def upload_file(
         entity_type="file",
         entity_id=record.id,
         title=f"File uploaded: {record.original_name}",
-        description=f"Uploaded file '{record.original_name}'",
+        description=(
+            f"Uploaded version {record.version} of '{record.original_name}'"
+            if previous_version
+            else f"Uploaded file '{record.original_name}'"
+        ),
     )
 
     return record
@@ -283,3 +321,127 @@ def delete_file(
     )
 
     return {"message": "File deleted successfully"}
+
+
+@router.get("/{file_id}/versions", response_model=list[FileRecordOut])
+def get_file_versions(
+    file_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    """Walk the previous_version_id chain in both directions to return the
+    full version history for a file, newest first."""
+    record = db.query(FileRecord).filter(FileRecord.id == file_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if not can_view_file(current_user, record):
+        raise HTTPException(status_code=403, detail="You do not have access to this file")
+
+    # Walk backwards to the oldest ancestor
+    oldest = record
+    while oldest.previous_version_id:
+        parent = db.query(FileRecord).filter(FileRecord.id == oldest.previous_version_id).first()
+        if not parent:
+            break
+        oldest = parent
+
+    # Walk forwards from the oldest, collecting every version
+    chain = [oldest]
+    current = oldest
+    while True:
+        child = db.query(FileRecord).filter(FileRecord.previous_version_id == current.id).first()
+        if not child:
+            break
+        chain.append(child)
+        current = child
+
+    return list(reversed(chain))
+
+
+@router.post("/bulk/delete")
+def bulk_delete_files(
+    payload: BulkFileIds,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    if not payload.file_ids:
+        raise HTTPException(status_code=400, detail="No file IDs provided")
+
+    records = (
+        db.query(FileRecord)
+        .filter(FileRecord.id.in_(payload.file_ids), FileRecord.deleted_at.is_(None))
+        .all()
+    )
+
+    deleted = 0
+    for record in records:
+        if not can_delete_file(current_user, record):
+            continue
+        record.deleted_at = utcnow()
+        deleted += 1
+
+    db.commit()
+
+    log_activity(
+        db=db,
+        user=current_user,
+        action="file_bulk_deleted",
+        entity_type="file",
+        title=f"Bulk delete: {deleted} file(s)",
+        description=f"Deleted {deleted} file(s) in bulk.",
+    )
+
+    return {"message": f"Deleted {deleted} file(s)", "deleted": deleted, "skipped": len(records) - deleted}
+
+
+@router.post("/bulk/download")
+def bulk_download_files(
+    payload: BulkFileIds,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    if not payload.file_ids:
+        raise HTTPException(status_code=400, detail="No file IDs provided")
+
+    records = (
+        db.query(FileRecord)
+        .filter(FileRecord.id.in_(payload.file_ids), FileRecord.deleted_at.is_(None))
+        .all()
+    )
+
+    visible = [r for r in records if can_view_file(current_user, r)]
+    if not visible:
+        raise HTTPException(status_code=404, detail="No accessible files found for the given IDs")
+
+    buffer = io.BytesIO()
+    used_names: dict[str, int] = {}
+
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for record in visible:
+            if not os.path.exists(record.file_path):
+                continue
+            name = record.original_name
+            count = used_names.get(name, 0)
+            used_names[name] = count + 1
+            if count:
+                stem, dot, ext = name.rpartition(".")
+                name = f"{stem} ({count}).{ext}" if dot else f"{name} ({count})"
+            zip_file.write(record.file_path, arcname=name)
+
+    buffer.seek(0)
+
+    log_activity(
+        db=db,
+        user=current_user,
+        action="file_bulk_downloaded",
+        entity_type="file",
+        title=f"Bulk download: {len(visible)} file(s)",
+        description=f"Downloaded {len(visible)} file(s) as a zip archive.",
+    )
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="files.zip"'},
+    )

@@ -379,3 +379,202 @@ export async function getAuthenticatedFileBlobUrl(fileId) {
     contentType: response.headers.get("content-type") || "",
   };
 }
+// --- Generic helpers for the new resources -----------------------------
+
+async function apiGet(path) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "GET",
+    credentials: "include",
+  });
+  const data = await parseResponse(response);
+  if (!response.ok) throw new Error(data.detail || "Request failed");
+  return data;
+}
+
+async function apiSend(path, method, payload) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method,
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: payload !== undefined ? JSON.stringify(payload) : undefined,
+  });
+  const data = await parseResponse(response);
+  if (!response.ok) throw new Error(data.detail || "Request failed");
+  return data;
+}
+
+async function apiDelete(path) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  const data = await parseResponse(response);
+  if (!response.ok) throw new Error(data.detail || "Request failed");
+  return data;
+}
+
+async function downloadBlob(path, fallbackFilename) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "GET",
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    const data = await parseResponse(response);
+    throw new Error(data.detail || "Failed to download file");
+  }
+
+  const blob = await response.blob();
+  const contentDisposition = response.headers.get("content-disposition") || "";
+  const basicMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
+  const filename = basicMatch?.[1] || fallbackFilename;
+
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+
+  return { success: true, filename };
+}
+
+// --- Departments ---------------------------------------------------------
+
+export const fetchDepartments = () => apiGet("/departments/");
+export const createDepartment = (payload) => apiSend("/departments/", "POST", payload);
+export const updateDepartment = (id, payload) => apiSend(`/departments/${id}`, "PUT", payload);
+export const deleteDepartment = (id) => apiDelete(`/departments/${id}`);
+
+// --- Tags ------------------------------------------------------------------
+
+export const fetchTags = () => apiGet("/tags/");
+export const createTag = (payload) => apiSend("/tags/", "POST", payload);
+export const updateTag = (id, payload) => apiSend(`/tags/${id}`, "PUT", payload);
+export const deleteTag = (id) => apiDelete(`/tags/${id}`);
+export const fetchClientTags = (clientId) => apiGet(`/tags/clients/${clientId}`);
+export const assignTagToClient = (clientId, tagId) =>
+  apiSend(`/tags/clients/${clientId}/${tagId}`, "POST");
+export const removeTagFromClient = (clientId, tagId) =>
+  apiDelete(`/tags/clients/${clientId}/${tagId}`);
+
+// --- Client notes history ---------------------------------------------------
+
+export const fetchClientNotes = (clientId) => apiGet(`/clients/${clientId}/notes`);
+export const addClientNote = (clientId, body) =>
+  apiSend(`/clients/${clientId}/notes`, "POST", { body });
+export const deleteClientNote = (clientId, noteId) =>
+  apiDelete(`/clients/${clientId}/notes/${noteId}`);
+
+// --- Bulk client actions ------------------------------------------------------
+
+export const bulkUpdateClientStatus = (clientIds, status) =>
+  apiSend("/clients/bulk/status", "POST", { client_ids: clientIds, status });
+
+// --- Tasks -------------------------------------------------------------------
+
+export function fetchTasks(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.status) searchParams.append("status", params.status);
+  if (params.client_id) searchParams.append("client_id", params.client_id);
+  if (params.assigned_to_me) searchParams.append("assigned_to_me", "true");
+  if (params.overdue_only) searchParams.append("overdue_only", "true");
+  const qs = searchParams.toString();
+  return apiGet(`/tasks/${qs ? `?${qs}` : ""}`);
+}
+export const createTask = (payload) => apiSend("/tasks/", "POST", payload);
+export const updateTask = (taskId, payload) => apiSend(`/tasks/${taskId}`, "PUT", payload);
+export const deleteTask = (taskId) => apiDelete(`/tasks/${taskId}`);
+
+// --- Notifications -------------------------------------------------------------
+
+export function fetchNotifications(unreadOnly = false) {
+  return apiGet(`/notifications/${unreadOnly ? "?unread_only=true" : ""}`);
+}
+export const fetchUnreadNotificationCount = () => apiGet("/notifications/unread-count");
+export const markNotificationRead = (id) => apiSend(`/notifications/${id}/read`, "PATCH");
+export const markAllNotificationsRead = () => apiSend("/notifications/read-all", "PATCH");
+
+// --- Comments / mentions -------------------------------------------------------
+
+export const fetchComments = (entityType, entityId) =>
+  apiGet(`/comments/?entity_type=${encodeURIComponent(entityType)}&entity_id=${entityId}`);
+export const createComment = (entityType, entityId, body) =>
+  apiSend("/comments/", "POST", { entity_type: entityType, entity_id: entityId, body });
+export const deleteComment = (commentId) => apiDelete(`/comments/${commentId}`);
+
+// --- Global search --------------------------------------------------------------
+
+export const globalSearch = (query) => apiGet(`/search/?q=${encodeURIComponent(query)}`);
+
+// --- Reports / exports ------------------------------------------------------------
+
+export const exportClientsCsv = () => downloadBlob("/reports/clients/csv", "clients.csv");
+export const exportClientsPdf = () => downloadBlob("/reports/clients/pdf", "clients.pdf");
+export const exportFilesCsv = () => downloadBlob("/reports/files/csv", "files.csv");
+export const exportTasksCsv = () => downloadBlob("/reports/tasks/csv", "tasks.csv");
+export const exportActivityLogsCsv = () =>
+  downloadBlob("/reports/activity-logs/csv", "activity_logs.csv");
+
+// --- File versioning & bulk file actions ---------------------------------------
+
+export async function uploadFileVersion(file, replacesFileId, clientId = "") {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("replaces_file_id", String(replacesFileId));
+  if (clientId) formData.append("client_id", clientId);
+
+  const response = await fetch(`${API_BASE_URL}/files/upload`, {
+    method: "POST",
+    credentials: "include",
+    body: formData,
+  });
+
+  const data = await parseResponse(response);
+  if (!response.ok) throw new Error(data.detail || "Failed to upload new version");
+  return data;
+}
+
+export const fetchFileVersions = (fileId) => apiGet(`/files/${fileId}/versions`);
+export const bulkDeleteFiles = (fileIds) => apiSend("/files/bulk/delete", "POST", { file_ids: fileIds });
+export async function bulkDownloadFiles(fileIds) {
+  const response = await fetch(`${API_BASE_URL}/files/bulk/download`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ file_ids: fileIds }),
+  });
+
+  if (!response.ok) {
+    const data = await parseResponse(response);
+    throw new Error(data.detail || "Failed to download files");
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "files.zip";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+
+  return { success: true };
+}
+
+// --- User department assignment --------------------------------------------------
+
+export const updateUserDepartment = (email, departmentId) =>
+  apiSend(`/users/${encodeURIComponent(email)}/department`, "PATCH", { department_id: departmentId });
+
+// --- Password reset & email verification -------------------------------------------
+
+export const requestPasswordReset = (email) =>
+  apiSend("/auth/request-password-reset", "POST", { email });
+export const resetPassword = (token, newPassword) =>
+  apiSend("/auth/reset-password", "POST", { token, new_password: newPassword });
+export const requestEmailVerification = () => apiSend("/auth/request-verification", "POST");
+export const verifyEmail = (token) => apiSend("/auth/verify-email", "POST", { token });
