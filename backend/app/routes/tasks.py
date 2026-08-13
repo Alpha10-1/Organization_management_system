@@ -7,6 +7,7 @@ from app.core.deps import get_current_active_user, get_user_by_email
 from app.core.notify import notify
 from app.core.time import utcnow
 from app.db.session import get_db
+from app.models.project import Project
 from app.models.task import Task
 from app.schemas.task import TaskCreate, TaskOut, TaskUpdate
 from app.schemas.user import UserPublic
@@ -24,6 +25,7 @@ def list_tasks(
     response: Response,
     status: str | None = Query(default=None),
     client_id: int | None = Query(default=None),
+    project_id: int | None = Query(default=None),
     assigned_to_me: bool = Query(default=False),
     overdue_only: bool = Query(default=False),
     skip: int = Query(default=0, ge=0),
@@ -38,6 +40,9 @@ def list_tasks(
 
     if client_id is not None:
         query = query.filter(Task.client_id == client_id)
+
+    if project_id is not None:
+        query = query.filter(Task.project_id == project_id)
 
     if assigned_to_me:
         query = query.filter(Task.assigned_to_email == current_user.email)
@@ -64,6 +69,13 @@ def create_task(
     if payload.priority not in VALID_PRIORITIES:
         raise HTTPException(status_code=400, detail="Invalid priority")
 
+    if payload.project_id is not None:
+        project = db.query(Project).filter(Project.id == payload.project_id, Project.deleted_at.is_(None)).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        if payload.client_id is not None and payload.client_id != project.client_id:
+            raise HTTPException(status_code=400, detail="client_id does not match the project's client")
+
     assigned_name = None
     if payload.assigned_to_email:
         assignee = get_user_by_email(db, payload.assigned_to_email.lower())
@@ -75,6 +87,7 @@ def create_task(
         title=payload.title,
         description=payload.description,
         client_id=payload.client_id,
+        project_id=payload.project_id,
         priority=payload.priority,
         due_date=payload.due_date,
         assigned_to_email=payload.assigned_to_email.lower() if payload.assigned_to_email else None,
@@ -139,6 +152,13 @@ def update_task(
 
     if "priority" in updates and updates["priority"] not in VALID_PRIORITIES:
         raise HTTPException(status_code=400, detail="Invalid priority")
+
+    if "project_id" in updates and updates["project_id"] is not None:
+        project = db.query(Project).filter(
+            Project.id == updates["project_id"], Project.deleted_at.is_(None)
+        ).first()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
 
     previous_assignee = task.assigned_to_email
 

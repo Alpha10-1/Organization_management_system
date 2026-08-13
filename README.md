@@ -167,7 +167,7 @@ uvicorn app.main:app --reload
 ```
 
 Open:
-`http://127.0.0.1:8000/docs`
+`http://localhost:8000/docs`
 
 ### Run tests
 
@@ -188,6 +188,22 @@ npm run dev
 
 Open:
 `http://localhost:3000`
+
+---
+
+## Troubleshooting: logged in but every request 401s
+
+If `POST /auth/login` returns `200` but `GET /auth/me` (and everything else)
+immediately returns `401`, this is almost always a **hostname mismatch**
+between frontend and backend. Browsers treat `localhost` and `127.0.0.1` as
+different sites, so the login cookie (`SameSite=Lax`) gets set but never
+sent back if, say, you open the frontend at `localhost:3000` while
+`NEXT_PUBLIC_API_URL` points at `127.0.0.1:8000` (or vice versa).
+
+Fix: make sure the URL you use in your browser for the frontend and the
+`NEXT_PUBLIC_API_URL` value both use the **same hostname** (both
+`localhost`, or both `127.0.0.1`), then restart `npm run dev` so the env
+change takes effect.
 
 ---
 

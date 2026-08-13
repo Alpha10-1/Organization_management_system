@@ -1,4 +1,10 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+// IMPORTANT: this must use the same hostname the frontend itself is loaded
+// from (localhost vs 127.0.0.1). Browsers treat those as different sites,
+// so a mismatch here means the login cookie (SameSite=Lax) gets set but
+// never sent back on later requests -- every call after login 401s even
+// though login itself succeeded. Override via NEXT_PUBLIC_API_URL in
+// .env.local if your backend runs somewhere else.
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 async function parseResponse(response) {
   const contentType = response.headers.get("content-type") || "";

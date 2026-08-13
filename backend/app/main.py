@@ -11,11 +11,13 @@ from app.routes.comments import router as comments_router
 from app.routes.departments import router as departments_router
 from app.routes.files import router as files_router
 from app.routes.notifications import router as notifications_router
+from app.routes.projects import router as projects_router
 from app.routes.protected import router as protected_router
 from app.routes.reports import router as reports_router
 from app.routes.search import router as search_router
 from app.routes.tags import router as tags_router
 from app.routes.tasks import router as tasks_router
+from app.routes.time_entries import router as time_entries_router
 from app.routes.users import router as users_router
 
 app = FastAPI(title="Organization Management System API")
@@ -45,8 +47,10 @@ app.include_router(clients_router)
 app.include_router(files_router)
 app.include_router(users_router)
 app.include_router(departments_router)
+app.include_router(projects_router)
 app.include_router(tags_router)
 app.include_router(tasks_router)
+app.include_router(time_entries_router)
 app.include_router(notifications_router)
 app.include_router(comments_router)
 app.include_router(search_router)

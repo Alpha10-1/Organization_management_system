@@ -8,6 +8,7 @@ class TaskBase(BaseModel):
     title: str
     description: Optional[str] = None
     client_id: Optional[int] = None
+    project_id: Optional[int] = None
     priority: str = "medium"
     due_date: Optional[datetime] = None
     assigned_to_email: Optional[EmailStr] = None
@@ -21,6 +22,7 @@ class TaskUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     client_id: Optional[int] = None
+    project_id: Optional[int] = None
     priority: Optional[str] = None
     due_date: Optional[datetime] = None
     assigned_to_email: Optional[EmailStr] = None
@@ -32,6 +34,7 @@ class TaskOut(BaseModel):
     title: str
     description: Optional[str] = None
     client_id: Optional[int] = None
+    project_id: Optional[int] = None
     status: str
     priority: str
     due_date: Optional[datetime] = None

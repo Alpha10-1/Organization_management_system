@@ -11,6 +11,7 @@ class Task(Base):
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
 
     status = Column(String(20), nullable=False, default="open", index=True)  # open | in_progress | done
     priority = Column(String(20), nullable=False, default="medium")  # low | medium | high
