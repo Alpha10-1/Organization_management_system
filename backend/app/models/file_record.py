@@ -14,6 +14,11 @@ class FileRecord(Base):
     file_type = Column(String(100), nullable=True)
     file_size = Column(Integer, nullable=False, default=0)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=True, index=True)
+    # Scoping a file to an engagement (in addition to, or instead of, the
+    # client) matches how deliverables are actually organized -- a client
+    # with three concurrent engagements has three separate deliverable
+    # folders in practice.
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
     uploaded_by_email = Column(String(255), nullable=False)
     uploaded_by_name = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=utcnow)

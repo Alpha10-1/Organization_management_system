@@ -27,6 +27,7 @@ from app.core.time import utcnow
 from app.db.session import get_db
 from app.models.client import Client
 from app.models.file_record import FileRecord
+from app.models.project import Project
 from app.schemas.file_record import FileRecordOut
 from app.schemas.user import UserPublic
 
@@ -67,6 +68,7 @@ def list_files(
     search: str | None = Query(default=None),
     file_type: str | None = Query(default=None),
     client_id: int | None = Query(default=None),
+    project_id: int | None = Query(default=None),
     mine_only: bool = Query(default=False),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
@@ -95,6 +97,9 @@ def list_files(
     if client_id is not None:
         query = query.filter(FileRecord.client_id == client_id)
 
+    if project_id is not None:
+        query = query.filter(FileRecord.project_id == project_id)
+
     response.headers["X-Total-Count"] = str(query.count())
 
     # NOTE: can_view_file() currently allows both admin and staff to view
@@ -117,6 +122,7 @@ def list_files(
 async def upload_file(
     file: UploadFile = File(...),
     client_id: int | None = Form(default=None),
+    project_id: int | None = Form(default=None),
     replaces_file_id: int | None = Form(default=None),
     db: Session = Depends(get_db),
     current_user: UserPublic = Depends(get_current_active_user),
@@ -140,6 +146,8 @@ async def upload_file(
             )
         if client_id is None:
             client_id = previous_version.client_id
+        if project_id is None:
+            project_id = previous_version.project_id
 
     extension = Path(file.filename).suffix.lower()
     if extension not in ALLOWED_UPLOAD_EXTENSIONS:
@@ -159,6 +167,15 @@ async def upload_file(
         )
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
+
+    if project_id is not None:
+        project = (
+            db.query(Project)
+            .filter(Project.id == project_id, Project.deleted_at.is_(None))
+            .first()
+        )
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
 
     stored_name = f"{uuid.uuid4().hex}{extension}"
     file_path = UPLOAD_DIR / stored_name
@@ -192,6 +209,7 @@ async def upload_file(
         file_type=file.content_type,
         file_size=file_size,
         client_id=client_id,
+        project_id=project_id,
         uploaded_by_email=current_user.email,
         uploaded_by_name=current_user.name,
         version=(previous_version.version + 1) if previous_version else 1,

@@ -6,14 +6,18 @@ from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user
 from app.core.time import utcnow
 from app.db.session import get_db
+from app.core.client_health import compute_client_health
 from app.models.client import Client
+from app.models.client_contact import ClientContact
 from app.models.client_note import ClientNote
 from app.schemas.client import (
     ClientBulkStatusUpdate,
     ClientCreate,
+    ClientHealth,
     ClientOut,
     ClientUpdate,
 )
+from app.schemas.client_contact import ClientContactCreate, ClientContactOut, ClientContactUpdate
 from app.schemas.client_note import ClientNoteCreate, ClientNoteOut
 from app.schemas.user import UserPublic
 
@@ -77,6 +81,15 @@ def create_client(
     db: Session = Depends(get_db),
     current_user: UserPublic = Depends(get_current_active_user),
 ):
+    if client.parent_client_id is not None:
+        parent = (
+            db.query(Client)
+            .filter(Client.id == client.parent_client_id, Client.deleted_at.is_(None))
+            .first()
+        )
+        if not parent:
+            raise HTTPException(status_code=404, detail="Parent client not found")
+
     new_client = Client(**client.model_dump())
     db.add(new_client)
     db.commit()
@@ -130,6 +143,23 @@ def update_client(
         raise HTTPException(status_code=404, detail="Client not found")
 
     updates = payload.model_dump(exclude_unset=True)
+
+    if "parent_client_id" in updates and updates["parent_client_id"] is not None:
+        if updates["parent_client_id"] == client_id:
+            raise HTTPException(status_code=400, detail="A client cannot be its own parent")
+        parent = (
+            db.query(Client)
+            .filter(Client.id == updates["parent_client_id"], Client.deleted_at.is_(None))
+            .first()
+        )
+        if not parent:
+            raise HTTPException(status_code=404, detail="Parent client not found")
+
+    if "relationship_health" in updates and updates["relationship_health"] is not None:
+        from app.core.client_health import VALID_HEALTH_VALUES
+
+        if updates["relationship_health"] not in VALID_HEALTH_VALUES:
+            raise HTTPException(status_code=400, detail=f"Invalid relationship_health. Must be one of: {sorted(VALID_HEALTH_VALUES)}")
 
     for key, value in updates.items():
         setattr(client, key, value)
@@ -293,3 +323,151 @@ def delete_client_note(
     note.deleted_at = utcnow()
     db.commit()
     return {"message": "Note deleted"}
+
+
+# --- Relationship health -----------------------------------------------
+
+
+@router.get("/{client_id}/health", response_model=ClientHealth)
+def get_client_health(
+    client_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    client = db.query(Client).filter(Client.id == client_id, Client.deleted_at.is_(None)).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    computed = compute_client_health(db, client_id)
+    is_override = client.relationship_health is not None
+
+    return ClientHealth(
+        client_id=client_id,
+        health=client.relationship_health if is_override else computed["computed_health"],
+        computed_health=computed["computed_health"],
+        is_manual_override=is_override,
+        overdue_task_count=computed["overdue_task_count"],
+        open_engagement_count=computed["open_engagement_count"],
+        contracts_expiring_soon=computed["contracts_expiring_soon"],
+        reasons=computed["reasons"],
+    )
+
+
+# --- Contacts ------------------------------------------------------------
+
+
+@router.get("/{client_id}/contacts", response_model=list[ClientContactOut])
+def list_client_contacts(
+    client_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    client = db.query(Client).filter(Client.id == client_id, Client.deleted_at.is_(None)).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    return (
+        db.query(ClientContact)
+        .filter(ClientContact.client_id == client_id, ClientContact.deleted_at.is_(None))
+        .order_by(ClientContact.is_primary.desc(), ClientContact.created_at.asc())
+        .all()
+    )
+
+
+@router.post("/{client_id}/contacts", response_model=ClientContactOut)
+def add_client_contact(
+    client_id: int,
+    payload: ClientContactCreate,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    client = db.query(Client).filter(Client.id == client_id, Client.deleted_at.is_(None)).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    if payload.is_primary:
+        # Only one primary contact per client: demote any existing one.
+        db.query(ClientContact).filter(
+            ClientContact.client_id == client_id,
+            ClientContact.deleted_at.is_(None),
+            ClientContact.is_primary.is_(True),
+        ).update({"is_primary": False})
+
+    contact = ClientContact(client_id=client_id, **payload.model_dump())
+    db.add(contact)
+    db.commit()
+    db.refresh(contact)
+
+    log_activity(
+        db=db,
+        user=current_user,
+        action="client_contact_added",
+        entity_type="client",
+        entity_id=client_id,
+        title=f"Contact added: {contact.name}",
+        description=f"Added contact '{contact.name}' ({contact.role or 'no role'}) to {client.first_name} {client.last_name}.",
+    )
+
+    return contact
+
+
+@router.put("/{client_id}/contacts/{contact_id}", response_model=ClientContactOut)
+def update_client_contact(
+    client_id: int,
+    contact_id: int,
+    payload: ClientContactUpdate,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    contact = (
+        db.query(ClientContact)
+        .filter(
+            ClientContact.id == contact_id,
+            ClientContact.client_id == client_id,
+            ClientContact.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    updates = payload.model_dump(exclude_unset=True)
+
+    if updates.get("is_primary"):
+        db.query(ClientContact).filter(
+            ClientContact.client_id == client_id,
+            ClientContact.deleted_at.is_(None),
+            ClientContact.id != contact_id,
+            ClientContact.is_primary.is_(True),
+        ).update({"is_primary": False})
+
+    for key, value in updates.items():
+        setattr(contact, key, value)
+
+    db.commit()
+    db.refresh(contact)
+    return contact
+
+
+@router.delete("/{client_id}/contacts/{contact_id}")
+def delete_client_contact(
+    client_id: int,
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    contact = (
+        db.query(ClientContact)
+        .filter(
+            ClientContact.id == contact_id,
+            ClientContact.client_id == client_id,
+            ClientContact.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    contact.deleted_at = utcnow()
+    db.commit()
+    return {"message": "Contact deleted successfully"}

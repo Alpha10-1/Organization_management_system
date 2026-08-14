@@ -12,6 +12,7 @@ class FileRecordOut(BaseModel):
     file_type: Optional[str] = None
     file_size: int
     client_id: Optional[int] = None
+    project_id: Optional[int] = None
     uploaded_by_email: str
     uploaded_by_name: str
     created_at: datetime
