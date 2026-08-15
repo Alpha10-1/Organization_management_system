@@ -5,6 +5,7 @@ import {
   BarChart3,
   ShieldCheck,
   ListChecks,
+  Briefcase,
 } from "lucide-react";
 
 export const navItems = [
@@ -18,6 +19,12 @@ export const navItems = [
     label: "Clients",
     href: "/dashboard/clients",
     icon: Users,
+    roles: ["admin", "staff"],
+  },
+  {
+    label: "Projects",
+    href: "/dashboard/projects",
+    icon: Briefcase,
     roles: ["admin", "staff"],
   },
   {

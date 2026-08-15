@@ -1,0 +1,2612 @@
+diff --git a/backend/.gitignore b/backend/.gitignore
+new file mode 100644
+index 0000000..6943645
+--- /dev/null
++++ b/backend/.gitignore
+@@ -0,0 +1,15 @@
++# python
++__pycache__/
++*.py[cod]
++*.egg-info/
++venv/
++.venv/
++
++# local sqlite db (regenerate via alembic upgrade head)
++organization.db
++test.db
++*.db-journal
++
++# env
++.env
++.env.local
+diff --git a/src/app/dashboard/clients/page.js b/src/app/dashboard/clients/page.js
+index e22c519..23fd821 100644
+--- a/src/app/dashboard/clients/page.js
++++ b/src/app/dashboard/clients/page.js
+@@ -15,8 +15,21 @@ import {
+   addClientNote,
+   deleteClientNote,
+   bulkUpdateClientStatus,
++  fetchClientContacts,
++  createClientContact,
++  updateClientContact,
++  deleteClientContact,
++  fetchClientHealth,
+ } from "@/lib/api";
+ 
++const HEALTH_STYLES = {
++  green: "bg-emerald-100 text-emerald-700",
++  amber: "bg-amber-100 text-amber-700",
++  red: "bg-rose-100 text-rose-700",
++};
++
++const initialContactForm = { name: "", role: "", email: "", phone: "", is_primary: false };
++
+ const initialForm = {
+   first_name: "",
+   last_name: "",
+@@ -25,6 +38,7 @@ const initialForm = {
+   status: "Active",
+   notes: "",
+   department_id: "",
++  parent_client_id: "",
+ };
+ 
+ export default function ClientsPage() {
+@@ -52,6 +66,11 @@ export default function ClientsPage() {
+   const [newNote, setNewNote] = useState("");
+   const [notesLoading, setNotesLoading] = useState(false);
+ 
++  const [contacts, setContacts] = useState([]);
++  const [contactForm, setContactForm] = useState(initialContactForm);
++  const [editingContactId, setEditingContactId] = useState(null);
++  const [health, setHealth] = useState(null);
++
+   async function loadClients(currentSearch = search, currentStatus = statusFilter) {
+     try {
+       setLoading(true);
+@@ -80,6 +99,8 @@ export default function ClientsPage() {
+     if (!selectedClient) {
+       setClientTags([]);
+       setNotes([]);
++      setContacts([]);
++      setHealth(null);
+       return;
+     }
+ 
+@@ -90,8 +111,64 @@ export default function ClientsPage() {
+       .then(setNotes)
+       .catch(() => setNotes([]))
+       .finally(() => setNotesLoading(false));
++
++    fetchClientContacts(selectedClient.id).then(setContacts).catch(() => setContacts([]));
++    fetchClientHealth(selectedClient.id).then(setHealth).catch(() => setHealth(null));
+   }, [selectedClient]);
+ 
++  function resetContactForm() {
++    setContactForm(initialContactForm);
++    setEditingContactId(null);
++  }
++
++  function startEditContact(contact) {
++    setEditingContactId(contact.id);
++    setContactForm({
++      name: contact.name,
++      role: contact.role || "",
++      email: contact.email || "",
++      phone: contact.phone || "",
++      is_primary: contact.is_primary,
++    });
++  }
++
++  async function handleContactSubmit(e) {
++    e.preventDefault();
++    if (!selectedClient) return;
++    try {
++      setError("");
++      const payload = {
++        name: contactForm.name,
++        role: contactForm.role || undefined,
++        email: contactForm.email || undefined,
++        phone: contactForm.phone || undefined,
++        is_primary: contactForm.is_primary,
++      };
++      if (editingContactId) {
++        await updateClientContact(selectedClient.id, editingContactId, payload);
++      } else {
++        await createClientContact(selectedClient.id, payload);
++      }
++      resetContactForm();
++      const updated = await fetchClientContacts(selectedClient.id);
++      setContacts(updated);
++    } catch (err) {
++      setError(err.message || "Failed to save contact");
++    }
++  }
++
++  async function handleDeleteContact(contactId) {
++    if (!selectedClient) return;
++    try {
++      setError("");
++      await deleteClientContact(selectedClient.id, contactId);
++      const updated = await fetchClientContacts(selectedClient.id);
++      setContacts(updated);
++    } catch (err) {
++      setError(err.message || "Failed to delete contact");
++    }
++  }
++
+   function toggleSelected(clientId) {
+     setSelectedIds((prev) =>
+       prev.includes(clientId) ? prev.filter((id) => id !== clientId) : [...prev, clientId]
+@@ -203,6 +280,7 @@ export default function ClientsPage() {
+       status: client.status || "Active",
+       notes: client.notes || "",
+       department_id: client.department_id ?? "",
++      parent_client_id: client.parent_client_id ?? "",
+     });
+     setShowModal(true);
+   }
+@@ -223,6 +301,7 @@ export default function ClientsPage() {
+       const payload = {
+         ...form,
+         department_id: form.department_id ? Number(form.department_id) : null,
++        parent_client_id: form.parent_client_id ? Number(form.parent_client_id) : null,
+       };
+ 
+       if (editingClient) {
+@@ -470,6 +549,31 @@ export default function ClientsPage() {
+                 <p className="mt-1 text-sm text-slate-800">{selectedClient.status}</p>
+               </div>
+ 
++              <div>
++                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
++                  Relationship Health
++                </p>
++                {health ? (
++                  <div className="mt-1 flex items-center gap-2">
++                    <span
++                      className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${HEALTH_STYLES[health.health] || HEALTH_STYLES.green}`}
++                    >
++                      {health.health}
++                      {health.is_manual_override ? " (manual)" : ""}
++                    </span>
++                  </div>
++                ) : (
++                  <p className="mt-1 text-sm text-slate-400">—</p>
++                )}
++                {health?.reasons?.length ? (
++                  <ul className="mt-2 list-disc pl-4 text-xs text-slate-500">
++                    {health.reasons.map((r, i) => (
++                      <li key={i}>{r}</li>
++                    ))}
++                  </ul>
++                ) : null}
++              </div>
++
+               <div>
+                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                   Phone
+@@ -589,6 +693,111 @@ export default function ClientsPage() {
+                   )}
+                 </div>
+               </div>
++
++              <div>
++                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
++                  Contacts
++                </p>
++                <div className="mt-2 space-y-2">
++                  {contacts.length === 0 ? (
++                    <p className="text-sm text-slate-400">No contacts added yet.</p>
++                  ) : (
++                    contacts.map((contact) => (
++                      <div
++                        key={contact.id}
++                        className="flex items-start justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3"
++                      >
++                        <div>
++                          <p className="text-sm font-medium text-slate-800">
++                            {contact.name}
++                            {contact.is_primary ? (
++                              <span className="ml-2 rounded-full bg-slate-900 px-2 py-0.5 text-[10px] font-semibold text-white">
++                                Primary
++                              </span>
++                            ) : null}
++                          </p>
++                          <p className="text-xs text-slate-500">{contact.role || "—"}</p>
++                          <p className="text-xs text-slate-500">
++                            {contact.email || "—"} {contact.phone ? `· ${contact.phone}` : ""}
++                          </p>
++                        </div>
++                        <div className="flex shrink-0 gap-2">
++                          <button
++                            onClick={() => startEditContact(contact)}
++                            className="text-xs font-semibold text-slate-700 hover:underline"
++                          >
++                            Edit
++                          </button>
++                          <button
++                            onClick={() => handleDeleteContact(contact.id)}
++                            className="text-xs font-semibold text-rose-500 hover:underline"
++                          >
++                            Delete
++                          </button>
++                        </div>
++                      </div>
++                    ))
++                  )}
++                </div>
++
++                <form onSubmit={handleContactSubmit} className="mt-3 space-y-2 rounded-xl border border-slate-200 bg-white p-3">
++                  <p className="text-xs font-semibold text-slate-600">
++                    {editingContactId ? "Edit Contact" : "Add Contact"}
++                  </p>
++                  <div className="grid grid-cols-2 gap-2">
++                    <input
++                      placeholder="Name"
++                      value={contactForm.name}
++                      onChange={(e) => setContactForm((p) => ({ ...p, name: e.target.value }))}
++                      className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
++                      required
++                    />
++                    <input
++                      placeholder="Role (e.g. CFO)"
++                      value={contactForm.role}
++                      onChange={(e) => setContactForm((p) => ({ ...p, role: e.target.value }))}
++                      className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
++                    />
++                    <input
++                      placeholder="Email"
++                      value={contactForm.email}
++                      onChange={(e) => setContactForm((p) => ({ ...p, email: e.target.value }))}
++                      className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
++                    />
++                    <input
++                      placeholder="Phone"
++                      value={contactForm.phone}
++                      onChange={(e) => setContactForm((p) => ({ ...p, phone: e.target.value }))}
++                      className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
++                    />
++                  </div>
++                  <label className="flex items-center gap-2 text-xs text-slate-600">
++                    <input
++                      type="checkbox"
++                      checked={contactForm.is_primary}
++                      onChange={(e) => setContactForm((p) => ({ ...p, is_primary: e.target.checked }))}
++                    />
++                    Primary contact
++                  </label>
++                  <div className="flex justify-end gap-2">
++                    {editingContactId ? (
++                      <button
++                        type="button"
++                        onClick={resetContactForm}
++                        className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
++                      >
++                        Cancel
++                      </button>
++                    ) : null}
++                    <button
++                      type="submit"
++                      className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
++                    >
++                      {editingContactId ? "Save" : "Add Contact"}
++                    </button>
++                  </div>
++                </form>
++              </div>
+             </div>
+           ) : (
+             <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-sm text-slate-500">
+@@ -708,6 +917,27 @@ export default function ClientsPage() {
+                 </select>
+               </div>
+ 
++              <div>
++                <label className="mb-2 block text-sm font-medium text-slate-700">
++                  Parent Client (group structure)
++                </label>
++                <select
++                  name="parent_client_id"
++                  value={form.parent_client_id}
++                  onChange={handleInputChange}
++                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                >
++                  <option value="">None (standalone)</option>
++                  {clients
++                    .filter((c) => !editingClient || c.id !== editingClient.id)
++                    .map((c) => (
++                      <option key={c.id} value={c.id}>
++                        {c.first_name} {c.last_name}
++                      </option>
++                    ))}
++                </select>
++              </div>
++
+               <div className="md:col-span-2">
+                 <label className="mb-2 block text-sm font-medium text-slate-700">
+                   Notes
+diff --git a/src/app/dashboard/projects/page.js b/src/app/dashboard/projects/page.js
+new file mode 100644
+index 0000000..add710f
+--- /dev/null
++++ b/src/app/dashboard/projects/page.js
+@@ -0,0 +1,1288 @@
++"use client";
++
++import { useEffect, useMemo, useState } from "react";
++import {
++  fetchProjects,
++  createProject,
++  updateProject,
++  deleteProject,
++  fetchClients,
++  fetchUsers,
++  fetchCurrentUser,
++  fetchMilestones,
++  createMilestone,
++  updateMilestone,
++  deleteMilestone,
++  fetchContracts,
++  createContract,
++  updateContract,
++  deleteContract,
++  fetchContractMargin,
++  fetchTimeEntries,
++  createTimeEntry,
++  deleteTimeEntry,
++  fetchProjectUtilization,
++  fetchTaskTemplates,
++  applyTaskTemplate,
++} from "@/lib/api";
++
++const PROJECT_TYPES = ["audit", "tax", "advisory", "systems_implementation", "other"];
++const PROJECT_STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"];
++const RISK_LEVELS = ["low", "medium", "high"];
++const BILLING_TYPES = ["fixed_fee", "hourly", "retainer"];
++
++const STATUS_STYLES = {
++  planning: "bg-slate-100 text-slate-600",
++  active: "bg-emerald-100 text-emerald-700",
++  on_hold: "bg-amber-100 text-amber-700",
++  completed: "bg-blue-100 text-blue-700",
++  cancelled: "bg-rose-100 text-rose-700",
++};
++
++const RISK_STYLES = {
++  low: "bg-emerald-100 text-emerald-700",
++  medium: "bg-amber-100 text-amber-700",
++  high: "bg-rose-100 text-rose-700",
++};
++
++const initialProjectForm = {
++  name: "",
++  client_id: "",
++  type: "other",
++  status: "planning",
++  start_date: "",
++  end_date: "",
++  budget: "",
++  engagement_partner_email: "",
++  engagement_manager_email: "",
++  description: "",
++  risk_level: "low",
++  compliance_flag: "",
++};
++
++const initialMilestoneForm = { name: "", description: "", due_date: "", status: "pending" };
++
++const initialContractForm = {
++  name: "",
++  billing_type: "fixed_fee",
++  value: "",
++  hourly_rate: "",
++  signed_date: "",
++  expiry_date: "",
++  status: "draft",
++  notes: "",
++};
++
++const initialTimeForm = { hours: "", entry_date: "", billable: true, notes: "" };
++
++function formatMoney(value) {
++  if (value === null || value === undefined || value === "") return "—";
++  return `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
++}
++
++function formatDate(value) {
++  if (!value) return "—";
++  return new Date(value).toLocaleDateString();
++}
++
++export default function ProjectsPage() {
++  const [projects, setProjects] = useState([]);
++  const [clients, setClients] = useState([]);
++  const [users, setUsers] = useState([]);
++  const [currentUser, setCurrentUser] = useState(null);
++  const [loading, setLoading] = useState(true);
++  const [error, setError] = useState("");
++  const [saving, setSaving] = useState(false);
++
++  const [clientFilter, setClientFilter] = useState("");
++  const [statusFilter, setStatusFilter] = useState("");
++  const [typeFilter, setTypeFilter] = useState("");
++  const [riskFilter, setRiskFilter] = useState("");
++
++  const [selectedProject, setSelectedProject] = useState(null);
++  const [activeTab, setActiveTab] = useState("overview");
++
++  const [showProjectModal, setShowProjectModal] = useState(false);
++  const [editingProject, setEditingProject] = useState(null);
++  const [projectForm, setProjectForm] = useState(initialProjectForm);
++
++  const [milestones, setMilestones] = useState([]);
++  const [showMilestoneModal, setShowMilestoneModal] = useState(false);
++  const [milestoneForm, setMilestoneForm] = useState(initialMilestoneForm);
++
++  const [contracts, setContracts] = useState([]);
++  const [contractMargins, setContractMargins] = useState({});
++  const [showContractModal, setShowContractModal] = useState(false);
++  const [contractForm, setContractForm] = useState(initialContractForm);
++
++  const [timeEntries, setTimeEntries] = useState([]);
++  const [utilization, setUtilization] = useState(null);
++  const [showTimeModal, setShowTimeModal] = useState(false);
++  const [timeForm, setTimeForm] = useState(initialTimeForm);
++
++  const [templates, setTemplates] = useState([]);
++  const [templateToApply, setTemplateToApply] = useState("");
++  const [applyingTemplate, setApplyingTemplate] = useState(false);
++
++  async function loadProjects() {
++    try {
++      setLoading(true);
++      setError("");
++      const data = await fetchProjects({
++        client_id: clientFilter || undefined,
++        status: statusFilter || undefined,
++        type: typeFilter || undefined,
++        risk_level: riskFilter || undefined,
++      });
++      setProjects(data);
++    } catch (err) {
++      setError(err.message || "Failed to load projects");
++    } finally {
++      setLoading(false);
++    }
++  }
++
++  useEffect(() => {
++    loadProjects();
++    fetchClients().then(setClients).catch(() => setClients([]));
++    fetchUsers().then(setUsers).catch(() => setUsers([]));
++    fetchCurrentUser().then(setCurrentUser).catch(() => setCurrentUser(null));
++    fetchTaskTemplates().then(setTemplates).catch(() => setTemplates([]));
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, []);
++
++  useEffect(() => {
++    loadProjects();
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [clientFilter, statusFilter, typeFilter, riskFilter]);
++
++  async function loadProjectDetail(project) {
++    setSelectedProject(project);
++    setActiveTab("overview");
++    try {
++      const [ms, cs, te, util] = await Promise.all([
++        fetchMilestones({ project_id: project.id }),
++        fetchContracts({ project_id: project.id }),
++        fetchTimeEntries({ project_id: project.id }),
++        fetchProjectUtilization(project.id).catch(() => null),
++      ]);
++      setMilestones(ms);
++      setContracts(cs);
++      setTimeEntries(te);
++      setUtilization(util);
++
++      const margins = {};
++      await Promise.all(
++        cs.map(async (c) => {
++          try {
++            margins[c.id] = await fetchContractMargin(c.id);
++          } catch {
++            // margin lookup is best-effort; skip contracts it fails for
++          }
++        })
++      );
++      setContractMargins(margins);
++    } catch (err) {
++      setError(err.message || "Failed to load project detail");
++    }
++  }
++
++  async function refreshDetail() {
++    if (selectedProject) await loadProjectDetail(selectedProject);
++  }
++
++  function clientLabel(clientId) {
++    const match = clients.find((c) => c.id === clientId);
++    return match ? `${match.first_name} ${match.last_name}` : `#${clientId}`;
++  }
++
++  // --- Project CRUD ---------------------------------------------------------
++
++  function openCreateProject() {
++    setEditingProject(null);
++    setProjectForm(initialProjectForm);
++    setShowProjectModal(true);
++  }
++
++  function openEditProject(project) {
++    setEditingProject(project);
++    setProjectForm({
++      name: project.name,
++      client_id: String(project.client_id),
++      type: project.type,
++      status: project.status,
++      start_date: project.start_date ? project.start_date.slice(0, 10) : "",
++      end_date: project.end_date ? project.end_date.slice(0, 10) : "",
++      budget: project.budget ?? "",
++      engagement_partner_email: project.engagement_partner_email || "",
++      engagement_manager_email: project.engagement_manager_email || "",
++      description: project.description || "",
++      risk_level: project.risk_level,
++      compliance_flag: project.compliance_flag || "",
++    });
++    setShowProjectModal(true);
++  }
++
++  function handleProjectFormChange(e) {
++    const { name, value, type, checked } = e.target;
++    setProjectForm((prev) => ({ ...prev, [name]: type === "checkbox" ? checked : value }));
++  }
++
++  async function handleProjectSubmit(e) {
++    e.preventDefault();
++    try {
++      setSaving(true);
++      setError("");
++      const payload = {
++        name: projectForm.name,
++        client_id: Number(projectForm.client_id),
++        type: projectForm.type,
++        status: projectForm.status,
++        start_date: projectForm.start_date ? new Date(projectForm.start_date).toISOString() : undefined,
++        end_date: projectForm.end_date ? new Date(projectForm.end_date).toISOString() : undefined,
++        budget: projectForm.budget !== "" ? Number(projectForm.budget) : undefined,
++        engagement_partner_email: projectForm.engagement_partner_email || undefined,
++        engagement_manager_email: projectForm.engagement_manager_email || undefined,
++        description: projectForm.description || undefined,
++        risk_level: projectForm.risk_level,
++        compliance_flag: projectForm.compliance_flag || undefined,
++      };
++      if (editingProject) {
++        await updateProject(editingProject.id, payload);
++      } else {
++        await createProject(payload);
++      }
++      setShowProjectModal(false);
++      await loadProjects();
++    } catch (err) {
++      setError(err.message || "Failed to save project");
++    } finally {
++      setSaving(false);
++    }
++  }
++
++  async function handleDeleteProject(project) {
++    try {
++      setError("");
++      await deleteProject(project.id);
++      if (selectedProject?.id === project.id) setSelectedProject(null);
++      await loadProjects();
++    } catch (err) {
++      setError(err.message || "Failed to delete project");
++    }
++  }
++
++  // --- Milestones -------------------------------------------------------------
++
++  async function handleCreateMilestone(e) {
++    e.preventDefault();
++    if (!selectedProject) return;
++    try {
++      setSaving(true);
++      setError("");
++      await createMilestone({
++        project_id: selectedProject.id,
++        name: milestoneForm.name,
++        description: milestoneForm.description || undefined,
++        due_date: milestoneForm.due_date ? new Date(milestoneForm.due_date).toISOString() : undefined,
++        status: milestoneForm.status,
++      });
++      setMilestoneForm(initialMilestoneForm);
++      setShowMilestoneModal(false);
++      await refreshDetail();
++    } catch (err) {
++      setError(err.message || "Failed to create milestone");
++    } finally {
++      setSaving(false);
++    }
++  }
++
++  async function handleMilestoneStatus(milestone, status) {
++    try {
++      setError("");
++      await updateMilestone(milestone.id, { status });
++      await refreshDetail();
++    } catch (err) {
++      setError(err.message || "Failed to update milestone");
++    }
++  }
++
++  async function handleDeleteMilestone(milestone) {
++    try {
++      setError("");
++      await deleteMilestone(milestone.id);
++      await refreshDetail();
++    } catch (err) {
++      setError(err.message || "Failed to delete milestone");
++    }
++  }
++
++  // --- Contracts ----------------------------------------------------------------
++
++  async function handleCreateContract(e) {
++    e.preventDefault();
++    if (!selectedProject) return;
++    try {
++      setSaving(true);
++      setError("");
++      await createContract({
++        project_id: selectedProject.id,
++        name: contractForm.name,
++        billing_type: contractForm.billing_type,
++        value: contractForm.value !== "" ? Number(contractForm.value) : undefined,
++        hourly_rate: contractForm.hourly_rate !== "" ? Number(contractForm.hourly_rate) : undefined,
++        signed_date: contractForm.signed_date || undefined,
++        expiry_date: contractForm.expiry_date || undefined,
++        status: contractForm.status,
++        notes: contractForm.notes || undefined,
++      });
++      setContractForm(initialContractForm);
++      setShowContractModal(false);
++      await refreshDetail();
++    } catch (err) {
++      setError(err.message || "Failed to create contract");
++    } finally {
++      setSaving(false);
++    }
++  }
++
++  async function handleContractStatus(contract, status) {
++    try {
++      setError("");
++      await updateContract(contract.id, { status });
++      await refreshDetail();
++    } catch (err) {
++      setError(err.message || "Failed to update contract");
++    }
++  }
++
++  async function handleDeleteContract(contract) {
++    try {
++      setError("");
++      await deleteContract(contract.id);
++      await refreshDetail();
++    } catch (err) {
++      setError(err.message || "Failed to delete contract");
++    }
++  }
++
++  // --- Time entries ---------------------------------------------------------------
++
++  async function handleLogTime(e) {
++    e.preventDefault();
++    if (!selectedProject) return;
++    try {
++      setSaving(true);
++      setError("");
++      await createTimeEntry({
++        project_id: selectedProject.id,
++        hours: Number(timeForm.hours),
++        entry_date: timeForm.entry_date || new Date().toISOString().slice(0, 10),
++        billable: timeForm.billable,
++        notes: timeForm.notes || undefined,
++      });
++      setTimeForm(initialTimeForm);
++      setShowTimeModal(false);
++      await refreshDetail();
++    } catch (err) {
++      setError(err.message || "Failed to log time");
++    } finally {
++      setSaving(false);
++    }
++  }
++
++  async function handleDeleteTimeEntry(entry) {
++    try {
++      setError("");
++      await deleteTimeEntry(entry.id);
++      await refreshDetail();
++    } catch (err) {
++      setError(err.message || "Failed to delete time entry");
++    }
++  }
++
++  // --- Task template application --------------------------------------------------
++
++  async function handleApplyTemplate() {
++    if (!selectedProject || !templateToApply) return;
++    try {
++      setApplyingTemplate(true);
++      setError("");
++      const created = await applyTaskTemplate(Number(templateToApply), {
++        project_id: selectedProject.id,
++      });
++      setTemplateToApply("");
++      await loadProjects();
++      alert(`Applied template: created ${created.length} task(s) on this engagement.`);
++    } catch (err) {
++      setError(err.message || "Failed to apply template");
++    } finally {
++      setApplyingTemplate(false);
++    }
++  }
++
++  const tabs = useMemo(
++    () => [
++      { id: "overview", label: "Overview" },
++      { id: "milestones", label: `Milestones (${milestones.length})` },
++      { id: "contracts", label: `Contracts (${contracts.length})` },
++      { id: "time", label: `Time (${timeEntries.length})` },
++      { id: "template", label: "Apply Template" },
++    ],
++    [milestones.length, contracts.length, timeEntries.length]
++  );
++
++  return (
++    <div className="space-y-6">
++      <div className="flex flex-col justify-between gap-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm md:flex-row md:items-center">
++        <div>
++          <h1 className="text-2xl font-bold text-slate-900">Engagements &amp; Projects</h1>
++          <p className="mt-1 text-sm text-slate-500">
++            Every client can run multiple concurrent engagements — track scope, team, budget and
++            risk for each one separately.
++          </p>
++        </div>
++        <button
++          onClick={openCreateProject}
++          className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
++        >
++          New Engagement
++        </button>
++      </div>
++
++      {error ? (
++        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
++          {error}
++        </div>
++      ) : null}
++
++      <div className="flex flex-wrap gap-3 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
++        <select
++          value={clientFilter}
++          onChange={(e) => setClientFilter(e.target.value)}
++          className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
++        >
++          <option value="">All clients</option>
++          {clients.map((c) => (
++            <option key={c.id} value={c.id}>
++              {c.first_name} {c.last_name}
++            </option>
++          ))}
++        </select>
++        <select
++          value={statusFilter}
++          onChange={(e) => setStatusFilter(e.target.value)}
++          className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
++        >
++          <option value="">All statuses</option>
++          {PROJECT_STATUSES.map((s) => (
++            <option key={s} value={s}>
++              {s.replace("_", " ")}
++            </option>
++          ))}
++        </select>
++        <select
++          value={typeFilter}
++          onChange={(e) => setTypeFilter(e.target.value)}
++          className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
++        >
++          <option value="">All types</option>
++          {PROJECT_TYPES.map((t) => (
++            <option key={t} value={t}>
++              {t.replace("_", " ")}
++            </option>
++          ))}
++        </select>
++        <select
++          value={riskFilter}
++          onChange={(e) => setRiskFilter(e.target.value)}
++          className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
++        >
++          <option value="">All risk levels</option>
++          {RISK_LEVELS.map((r) => (
++            <option key={r} value={r}>
++              {r}
++            </option>
++          ))}
++        </select>
++      </div>
++
++      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1.1fr_1fr]">
++        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
++          <div className="overflow-x-auto">
++            <table className="w-full min-w-[640px] border-separate border-spacing-y-3">
++              <thead>
++                <tr className="text-left text-sm text-slate-500">
++                  <th className="pb-2">Engagement</th>
++                  <th className="pb-2">Client</th>
++                  <th className="pb-2">Status</th>
++                  <th className="pb-2">Risk</th>
++                  <th className="pb-2">Tasks</th>
++                  <th className="pb-2">Actions</th>
++                </tr>
++              </thead>
++              <tbody>
++                {loading ? (
++                  <tr>
++                    <td colSpan={6} className="py-8 text-center text-sm text-slate-500">
++                      Loading engagements...
++                    </td>
++                  </tr>
++                ) : projects.length === 0 ? (
++                  <tr>
++                    <td colSpan={6} className="py-8 text-center text-sm text-slate-500">
++                      No engagements found.
++                    </td>
++                  </tr>
++                ) : (
++                  projects.map((p) => (
++                    <tr
++                      key={p.id}
++                      onClick={() => loadProjectDetail(p)}
++                      className={`cursor-pointer bg-slate-50 align-top transition hover:bg-slate-100 ${
++                        selectedProject?.id === p.id ? "ring-2 ring-slate-900" : ""
++                      }`}
++                    >
++                      <td className="rounded-l-2xl px-4 py-4">
++                        <p className="font-medium text-slate-900">{p.name}</p>
++                        <p className="mt-1 text-xs capitalize text-slate-500">{p.type.replace("_", " ")}</p>
++                      </td>
++                      <td className="px-4 py-4 text-sm text-slate-700">{clientLabel(p.client_id)}</td>
++                      <td className="px-4 py-4">
++                        <span
++                          className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${STATUS_STYLES[p.status] || STATUS_STYLES.planning}`}
++                        >
++                          {p.status.replace("_", " ")}
++                        </span>
++                      </td>
++                      <td className="px-4 py-4">
++                        <span
++                          className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${RISK_STYLES[p.risk_level] || RISK_STYLES.low}`}
++                        >
++                          {p.risk_level}
++                        </span>
++                      </td>
++                      <td className="px-4 py-4 text-sm text-slate-700">
++                        {p.open_task_count}/{p.task_count} open
++                        {p.overdue_task_count > 0 ? (
++                          <span className="ml-2 text-xs font-semibold text-rose-600">
++                            {p.overdue_task_count} overdue
++                          </span>
++                        ) : null}
++                      </td>
++                      <td className="rounded-r-2xl px-4 py-4">
++                        <div className="flex gap-3">
++                          <button
++                            onClick={(e) => {
++                              e.stopPropagation();
++                              openEditProject(p);
++                            }}
++                            className="text-sm font-semibold text-slate-700 hover:underline"
++                          >
++                            Edit
++                          </button>
++                          <button
++                            onClick={(e) => {
++                              e.stopPropagation();
++                              handleDeleteProject(p);
++                            }}
++                            className="text-sm font-semibold text-rose-600 hover:underline"
++                          >
++                            Delete
++                          </button>
++                        </div>
++                      </td>
++                    </tr>
++                  ))
++                )}
++              </tbody>
++            </table>
++          </div>
++        </div>
++
++        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
++          {!selectedProject ? (
++            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-sm text-slate-500">
++              Select an engagement from the list to view milestones, contracts, and time.
++            </div>
++          ) : (
++            <div>
++              <div className="flex items-start justify-between gap-3">
++                <div>
++                  <h2 className="text-lg font-semibold text-slate-900">{selectedProject.name}</h2>
++                  <p className="text-sm text-slate-500">{clientLabel(selectedProject.client_id)}</p>
++                </div>
++              </div>
++
++              <div className="mt-4 flex flex-wrap gap-2 border-b border-slate-200 pb-3">
++                {tabs.map((tab) => (
++                  <button
++                    key={tab.id}
++                    onClick={() => setActiveTab(tab.id)}
++                    className={`rounded-xl px-3 py-2 text-xs font-semibold transition ${
++                      activeTab === tab.id
++                        ? "bg-slate-900 text-white"
++                        : "bg-slate-100 text-slate-600 hover:bg-slate-200"
++                    }`}
++                  >
++                    {tab.label}
++                  </button>
++                ))}
++              </div>
++
++              {activeTab === "overview" ? (
++                <div className="mt-4 space-y-3">
++                  <div className="grid grid-cols-2 gap-3 text-sm">
++                    <div>
++                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Budget</p>
++                      <p className="mt-1 text-slate-800">{formatMoney(selectedProject.budget)}</p>
++                    </div>
++                    <div>
++                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Timeline</p>
++                      <p className="mt-1 text-slate-800">
++                        {formatDate(selectedProject.start_date)} – {formatDate(selectedProject.end_date)}
++                      </p>
++                    </div>
++                    <div>
++                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Partner</p>
++                      <p className="mt-1 text-slate-800">
++                        {selectedProject.engagement_partner_name || selectedProject.engagement_partner_email || "—"}
++                      </p>
++                    </div>
++                    <div>
++                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Manager</p>
++                      <p className="mt-1 text-slate-800">
++                        {selectedProject.engagement_manager_name || selectedProject.engagement_manager_email || "—"}
++                      </p>
++                    </div>
++                    <div>
++                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Compliance flag</p>
++                      <p className="mt-1 text-slate-800">{selectedProject.compliance_flag || "—"}</p>
++                    </div>
++                    <div>
++                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Hours logged</p>
++                      <p className="mt-1 text-slate-800">
++                        {utilization ? `${Number(utilization.total_hours).toFixed(1)}h total (${Number(utilization.billable_hours).toFixed(1)}h billable)` : "—"}
++                      </p>
++                    </div>
++                  </div>
++                  {selectedProject.description ? (
++                    <div>
++                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Description</p>
++                      <p className="mt-1 whitespace-pre-wrap text-sm text-slate-800">
++                        {selectedProject.description}
++                      </p>
++                    </div>
++                  ) : null}
++                </div>
++              ) : null}
++
++              {activeTab === "milestones" ? (
++                <div className="mt-4 space-y-3">
++                  <button
++                    onClick={() => setShowMilestoneModal(true)}
++                    className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
++                  >
++                    + Add Milestone
++                  </button>
++                  <div className="max-h-72 space-y-2 overflow-y-auto">
++                    {milestones.length === 0 ? (
++                      <p className="text-sm text-slate-400">No milestones yet.</p>
++                    ) : (
++                      milestones.map((m) => (
++                        <div key={m.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
++                          <div className="flex items-start justify-between gap-2">
++                            <div>
++                              <p className="text-sm font-medium text-slate-800">{m.name}</p>
++                              <p className="text-xs text-slate-500">Due {formatDate(m.due_date)}</p>
++                            </div>
++                            <button
++                              onClick={() => handleDeleteMilestone(m)}
++                              className="shrink-0 text-xs font-semibold text-rose-500 hover:underline"
++                            >
++                              Delete
++                            </button>
++                          </div>
++                          <select
++                            value={m.status}
++                            onChange={(e) => handleMilestoneStatus(m, e.target.value)}
++                            className="mt-2 rounded-lg border border-slate-300 px-2 py-1 text-xs outline-none focus:border-slate-900"
++                          >
++                            <option value="pending">Pending</option>
++                            <option value="achieved">Achieved</option>
++                            <option value="missed">Missed</option>
++                          </select>
++                        </div>
++                      ))
++                    )}
++                  </div>
++                </div>
++              ) : null}
++
++              {activeTab === "contracts" ? (
++                <div className="mt-4 space-y-3">
++                  <button
++                    onClick={() => setShowContractModal(true)}
++                    className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
++                  >
++                    + Add Contract / SOW
++                  </button>
++                  <div className="max-h-72 space-y-2 overflow-y-auto">
++                    {contracts.length === 0 ? (
++                      <p className="text-sm text-slate-400">No contracts yet.</p>
++                    ) : (
++                      contracts.map((c) => {
++                        const margin = contractMargins[c.id];
++                        return (
++                          <div key={c.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
++                            <div className="flex items-start justify-between gap-2">
++                              <div>
++                                <p className="text-sm font-medium text-slate-800">{c.name}</p>
++                                <p className="text-xs capitalize text-slate-500">
++                                  {c.billing_type.replace("_", " ")} · {formatMoney(c.value)}
++                                </p>
++                              </div>
++                              <button
++                                onClick={() => handleDeleteContract(c)}
++                                className="shrink-0 text-xs font-semibold text-rose-500 hover:underline"
++                              >
++                                Delete
++                              </button>
++                            </div>
++                            <select
++                              value={c.status}
++                              onChange={(e) => handleContractStatus(c, e.target.value)}
++                              className="mt-2 rounded-lg border border-slate-300 px-2 py-1 text-xs outline-none focus:border-slate-900"
++                            >
++                              <option value="draft">Draft</option>
++                              <option value="signed">Signed</option>
++                              <option value="expired">Expired</option>
++                              <option value="terminated">Terminated</option>
++                            </select>
++                            {margin ? (
++                              <p className="mt-2 text-xs text-slate-600">
++                                {Number(margin.billable_hours).toFixed(1)}h billable logged
++                                {margin.remaining_value !== null && margin.remaining_value !== undefined
++                                  ? ` · ${formatMoney(margin.remaining_value)} remaining`
++                                  : ""}
++                              </p>
++                            ) : null}
++                          </div>
++                        );
++                      })
++                    )}
++                  </div>
++                </div>
++              ) : null}
++
++              {activeTab === "time" ? (
++                <div className="mt-4 space-y-3">
++                  <button
++                    onClick={() => setShowTimeModal(true)}
++                    className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
++                  >
++                    + Log Time
++                  </button>
++                  <div className="max-h-72 space-y-2 overflow-y-auto">
++                    {timeEntries.length === 0 ? (
++                      <p className="text-sm text-slate-400">No time logged yet.</p>
++                    ) : (
++                      timeEntries.map((t) => (
++                        <div
++                          key={t.id}
++                          className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 p-3"
++                        >
++                          <div>
++                            <p className="text-sm text-slate-800">
++                              {t.hours}h · {t.user_name} · {formatDate(t.entry_date)}
++                              {!t.billable ? <span className="ml-2 text-xs text-slate-400">(non-billable)</span> : null}
++                            </p>
++                            {t.notes ? <p className="text-xs text-slate-500">{t.notes}</p> : null}
++                          </div>
++                          <button
++                            onClick={() => handleDeleteTimeEntry(t)}
++                            className="text-xs font-semibold text-rose-500 hover:underline"
++                          >
++                            Delete
++                          </button>
++                        </div>
++                      ))
++                    )}
++                  </div>
++                </div>
++              ) : null}
++
++              {activeTab === "template" ? (
++                <div className="mt-4 space-y-3">
++                  <p className="text-sm text-slate-500">
++                    Clone a standard checklist (e.g. an audit kickoff) onto this engagement.
++                  </p>
++                  <div className="flex gap-2">
++                    <select
++                      value={templateToApply}
++                      onChange={(e) => setTemplateToApply(e.target.value)}
++                      className="flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
++                    >
++                      <option value="">Choose a template...</option>
++                      {templates.map((t) => (
++                        <option key={t.id} value={t.id}>
++                          {t.name} ({t.items.length} items)
++                        </option>
++                      ))}
++                    </select>
++                    <button
++                      onClick={handleApplyTemplate}
++                      disabled={!templateToApply || applyingTemplate}
++                      className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
++                    >
++                      {applyingTemplate ? "Applying..." : "Apply"}
++                    </button>
++                  </div>
++                  {templates.length === 0 ? (
++                    <p className="text-xs text-slate-400">
++                      No task templates exist yet. Create one from the Tasks page.
++                    </p>
++                  ) : null}
++                </div>
++              ) : null}
++            </div>
++          )}
++        </div>
++      </div>
++
++      {showProjectModal ? (
++        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
++          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl">
++            <div className="mb-6 flex items-start justify-between gap-4">
++              <div>
++                <h2 className="text-2xl font-bold text-slate-900">
++                  {editingProject ? "Edit Engagement" : "New Engagement"}
++                </h2>
++                <p className="mt-1 text-sm text-slate-500">
++                  Engagements sit between a client and their tasks.
++                </p>
++              </div>
++              <button
++                onClick={() => setShowProjectModal(false)}
++                className="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-600 hover:bg-slate-100"
++              >
++                Close
++              </button>
++            </div>
++
++            <form onSubmit={handleProjectSubmit} className="space-y-4">
++              <div>
++                <label className="mb-2 block text-sm font-medium text-slate-700">Name</label>
++                <input
++                  name="name"
++                  value={projectForm.name}
++                  onChange={handleProjectFormChange}
++                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  required
++                />
++              </div>
++
++              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">Client</label>
++                  <select
++                    name="client_id"
++                    value={projectForm.client_id}
++                    onChange={handleProjectFormChange}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                    required
++                  >
++                    <option value="">Select a client</option>
++                    {clients.map((c) => (
++                      <option key={c.id} value={c.id}>
++                        {c.first_name} {c.last_name}
++                      </option>
++                    ))}
++                  </select>
++                </div>
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">Type</label>
++                  <select
++                    name="type"
++                    value={projectForm.type}
++                    onChange={handleProjectFormChange}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  >
++                    {PROJECT_TYPES.map((t) => (
++                      <option key={t} value={t}>
++                        {t.replace("_", " ")}
++                      </option>
++                    ))}
++                  </select>
++                </div>
++              </div>
++
++              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">Status</label>
++                  <select
++                    name="status"
++                    value={projectForm.status}
++                    onChange={handleProjectFormChange}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  >
++                    {PROJECT_STATUSES.map((s) => (
++                      <option key={s} value={s}>
++                        {s.replace("_", " ")}
++                      </option>
++                    ))}
++                  </select>
++                </div>
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">Risk Level</label>
++                  <select
++                    name="risk_level"
++                    value={projectForm.risk_level}
++                    onChange={handleProjectFormChange}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  >
++                    {RISK_LEVELS.map((r) => (
++                      <option key={r} value={r}>
++                        {r}
++                      </option>
++                    ))}
++                  </select>
++                </div>
++              </div>
++
++              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">Start Date</label>
++                  <input
++                    type="date"
++                    name="start_date"
++                    value={projectForm.start_date}
++                    onChange={handleProjectFormChange}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  />
++                </div>
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">End Date</label>
++                  <input
++                    type="date"
++                    name="end_date"
++                    value={projectForm.end_date}
++                    onChange={handleProjectFormChange}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  />
++                </div>
++              </div>
++
++              <div>
++                <label className="mb-2 block text-sm font-medium text-slate-700">Budget</label>
++                <input
++                  type="number"
++                  step="0.01"
++                  name="budget"
++                  value={projectForm.budget}
++                  onChange={handleProjectFormChange}
++                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                />
++              </div>
++
++              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">Engagement Partner</label>
++                  <select
++                    name="engagement_partner_email"
++                    value={projectForm.engagement_partner_email}
++                    onChange={handleProjectFormChange}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  >
++                    <option value="">None</option>
++                    {users.map((u) => (
++                      <option key={u.email} value={u.email}>
++                        {u.name}
++                      </option>
++                    ))}
++                  </select>
++                </div>
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">Engagement Manager</label>
++                  <select
++                    name="engagement_manager_email"
++                    value={projectForm.engagement_manager_email}
++                    onChange={handleProjectFormChange}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  >
++                    <option value="">None</option>
++                    {users.map((u) => (
++                      <option key={u.email} value={u.email}>
++                        {u.name}
++                      </option>
++                    ))}
++                  </select>
++                </div>
++              </div>
++
++              <div>
++                <label className="mb-2 block text-sm font-medium text-slate-700">Compliance Flag</label>
++                <input
++                  name="compliance_flag"
++                  value={projectForm.compliance_flag}
++                  onChange={handleProjectFormChange}
++                  placeholder="e.g. SOX, PCAOB"
++                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                />
++              </div>
++
++              <div>
++                <label className="mb-2 block text-sm font-medium text-slate-700">Description</label>
++                <textarea
++                  name="description"
++                  value={projectForm.description}
++                  onChange={handleProjectFormChange}
++                  rows={3}
++                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                />
++              </div>
++
++              <div className="flex justify-end gap-3 pt-2">
++                <button
++                  type="button"
++                  onClick={() => setShowProjectModal(false)}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
++                >
++                  Cancel
++                </button>
++                <button
++                  type="submit"
++                  disabled={saving}
++                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-70"
++                >
++                  {saving ? "Saving..." : editingProject ? "Save Changes" : "Create Engagement"}
++                </button>
++              </div>
++            </form>
++          </div>
++        </div>
++      ) : null}
++
++      {showMilestoneModal ? (
++        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
++          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
++            <div className="mb-4 flex items-start justify-between gap-4">
++              <h2 className="text-xl font-bold text-slate-900">New Milestone</h2>
++              <button
++                onClick={() => setShowMilestoneModal(false)}
++                className="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-600 hover:bg-slate-100"
++              >
++                Close
++              </button>
++            </div>
++            <form onSubmit={handleCreateMilestone} className="space-y-4">
++              <input
++                placeholder="Milestone name"
++                value={milestoneForm.name}
++                onChange={(e) => setMilestoneForm((p) => ({ ...p, name: e.target.value }))}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                required
++              />
++              <textarea
++                placeholder="Description (optional)"
++                value={milestoneForm.description}
++                onChange={(e) => setMilestoneForm((p) => ({ ...p, description: e.target.value }))}
++                rows={2}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++              />
++              <input
++                type="date"
++                value={milestoneForm.due_date}
++                onChange={(e) => setMilestoneForm((p) => ({ ...p, due_date: e.target.value }))}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++              />
++              <div className="flex justify-end gap-3">
++                <button
++                  type="button"
++                  onClick={() => setShowMilestoneModal(false)}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
++                >
++                  Cancel
++                </button>
++                <button
++                  type="submit"
++                  disabled={saving}
++                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-70"
++                >
++                  {saving ? "Saving..." : "Add Milestone"}
++                </button>
++              </div>
++            </form>
++          </div>
++        </div>
++      ) : null}
++
++      {showContractModal ? (
++        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
++          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
++            <div className="mb-4 flex items-start justify-between gap-4">
++              <h2 className="text-xl font-bold text-slate-900">New Contract / SOW</h2>
++              <button
++                onClick={() => setShowContractModal(false)}
++                className="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-600 hover:bg-slate-100"
++              >
++                Close
++              </button>
++            </div>
++            <form onSubmit={handleCreateContract} className="space-y-4">
++              <input
++                placeholder="Contract name"
++                value={contractForm.name}
++                onChange={(e) => setContractForm((p) => ({ ...p, name: e.target.value }))}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                required
++              />
++              <select
++                value={contractForm.billing_type}
++                onChange={(e) => setContractForm((p) => ({ ...p, billing_type: e.target.value }))}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++              >
++                {BILLING_TYPES.map((b) => (
++                  <option key={b} value={b}>
++                    {b.replace("_", " ")}
++                  </option>
++                ))}
++              </select>
++              <div className="grid grid-cols-2 gap-3">
++                <input
++                  type="number"
++                  step="0.01"
++                  placeholder="Contract value"
++                  value={contractForm.value}
++                  onChange={(e) => setContractForm((p) => ({ ...p, value: e.target.value }))}
++                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                />
++                <input
++                  type="number"
++                  step="0.01"
++                  placeholder="Hourly rate"
++                  value={contractForm.hourly_rate}
++                  onChange={(e) => setContractForm((p) => ({ ...p, hourly_rate: e.target.value }))}
++                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                />
++              </div>
++              <div className="grid grid-cols-2 gap-3">
++                <div>
++                  <label className="mb-1 block text-xs text-slate-500">Signed date</label>
++                  <input
++                    type="date"
++                    value={contractForm.signed_date}
++                    onChange={(e) => setContractForm((p) => ({ ...p, signed_date: e.target.value }))}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  />
++                </div>
++                <div>
++                  <label className="mb-1 block text-xs text-slate-500">Expiry date</label>
++                  <input
++                    type="date"
++                    value={contractForm.expiry_date}
++                    onChange={(e) => setContractForm((p) => ({ ...p, expiry_date: e.target.value }))}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  />
++                </div>
++              </div>
++              <textarea
++                placeholder="Notes (optional)"
++                value={contractForm.notes}
++                onChange={(e) => setContractForm((p) => ({ ...p, notes: e.target.value }))}
++                rows={2}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++              />
++              <div className="flex justify-end gap-3">
++                <button
++                  type="button"
++                  onClick={() => setShowContractModal(false)}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
++                >
++                  Cancel
++                </button>
++                <button
++                  type="submit"
++                  disabled={saving}
++                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-70"
++                >
++                  {saving ? "Saving..." : "Add Contract"}
++                </button>
++              </div>
++            </form>
++          </div>
++        </div>
++      ) : null}
++
++      {showTimeModal ? (
++        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
++          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
++            <div className="mb-4 flex items-start justify-between gap-4">
++              <h2 className="text-xl font-bold text-slate-900">Log Time</h2>
++              <button
++                onClick={() => setShowTimeModal(false)}
++                className="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-600 hover:bg-slate-100"
++              >
++                Close
++              </button>
++            </div>
++            <form onSubmit={handleLogTime} className="space-y-4">
++              <input
++                type="number"
++                step="0.25"
++                min="0.25"
++                max="24"
++                placeholder="Hours"
++                value={timeForm.hours}
++                onChange={(e) => setTimeForm((p) => ({ ...p, hours: e.target.value }))}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                required
++              />
++              <input
++                type="date"
++                value={timeForm.entry_date}
++                onChange={(e) => setTimeForm((p) => ({ ...p, entry_date: e.target.value }))}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                required
++              />
++              <label className="flex items-center gap-2 text-sm text-slate-700">
++                <input
++                  type="checkbox"
++                  checked={timeForm.billable}
++                  onChange={(e) => setTimeForm((p) => ({ ...p, billable: e.target.checked }))}
++                />
++                Billable
++              </label>
++              <textarea
++                placeholder="Notes (optional)"
++                value={timeForm.notes}
++                onChange={(e) => setTimeForm((p) => ({ ...p, notes: e.target.value }))}
++                rows={2}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++              />
++              <p className="text-xs text-slate-400">
++                Logged as {currentUser?.name || "you"}.
++              </p>
++              <div className="flex justify-end gap-3">
++                <button
++                  type="button"
++                  onClick={() => setShowTimeModal(false)}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
++                >
++                  Cancel
++                </button>
++                <button
++                  type="submit"
++                  disabled={saving}
++                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-70"
++                >
++                  {saving ? "Saving..." : "Log Time"}
++                </button>
++              </div>
++            </form>
++          </div>
++        </div>
++      ) : null}
++    </div>
++  );
++}
+diff --git a/src/app/dashboard/reports/page.js b/src/app/dashboard/reports/page.js
+index 9d8cdf5..7edfe9b 100644
+--- a/src/app/dashboard/reports/page.js
++++ b/src/app/dashboard/reports/page.js
+@@ -9,8 +9,245 @@ import {
+   exportFilesCsv,
+   exportTasksCsv,
+   exportActivityLogsCsv,
++  fetchUsers,
++  fetchClients,
++  fetchPartnerDashboard,
++  fetchClientDashboard,
+ } from "@/lib/api";
+ 
++function formatMoney(value) {
++  if (value === null || value === undefined) return "—";
++  return `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
++}
++
++function formatDate(value) {
++  if (!value) return "—";
++  return new Date(value).toLocaleDateString();
++}
++
++function PartnerDashboardPanel() {
++  const [users, setUsers] = useState([]);
++  const [partnerEmail, setPartnerEmail] = useState("");
++  const [data, setData] = useState(null);
++  const [loading, setLoading] = useState(false);
++  const [error, setError] = useState("");
++
++  useEffect(() => {
++    fetchUsers().then(setUsers).catch(() => setUsers([]));
++  }, []);
++
++  useEffect(() => {
++    if (!partnerEmail) {
++      setData(null);
++      return;
++    }
++    setLoading(true);
++    setError("");
++    fetchPartnerDashboard(partnerEmail)
++      .then(setData)
++      .catch((err) => setError(err.message || "Failed to load partner dashboard"))
++      .finally(() => setLoading(false));
++  }, [partnerEmail]);
++
++  return (
++    <div className="space-y-4">
++      <select
++        value={partnerEmail}
++        onChange={(e) => setPartnerEmail(e.target.value)}
++        className="w-full max-w-sm rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++      >
++        <option value="">Choose a partner...</option>
++        {users.map((u) => (
++          <option key={u.email} value={u.email}>
++            {u.name}
++          </option>
++        ))}
++      </select>
++
++      {error ? (
++        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
++          {error}
++        </div>
++      ) : null}
++
++      {loading ? (
++        <p className="text-sm text-slate-500">Loading...</p>
++      ) : data ? (
++        <div className="space-y-4">
++          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
++            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
++              <p className="text-xs text-slate-500">Active Engagements</p>
++              <p className="mt-1 text-2xl font-bold text-slate-900">{data.active_engagement_count}</p>
++            </div>
++            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
++              <p className="text-xs text-slate-500">Overdue Tasks</p>
++              <p className="mt-1 text-2xl font-bold text-rose-600">{data.overdue_task_count}</p>
++            </div>
++            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
++              <p className="text-xs text-slate-500">Upcoming (14d)</p>
++              <p className="mt-1 text-2xl font-bold text-slate-900">
++                {data.upcoming_deadlines.tasks.length + data.upcoming_deadlines.milestones.length}
++              </p>
++            </div>
++          </div>
++
++          <div>
++            <p className="mb-2 text-sm font-semibold text-slate-700">Engagements</p>
++            <div className="space-y-2">
++              {data.engagements.map((e) => (
++                <div key={e.id} className="rounded-xl border border-slate-200 bg-white p-3 text-sm">
++                  <div className="flex items-center justify-between">
++                    <p className="font-medium text-slate-800">{e.name}</p>
++                    <span className="text-xs capitalize text-slate-500">{e.status}</span>
++                  </div>
++                  <p className="mt-1 text-xs text-slate-500">
++                    {e.hours_logged}h logged
++                    {e.budget !== null ? ` · Budget ${formatMoney(e.budget)}` : ""}
++                    {e.risk_level === "high" ? (
++                      <span className="ml-2 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
++                        high risk
++                      </span>
++                    ) : null}
++                  </p>
++                </div>
++              ))}
++              {data.engagements.length === 0 ? (
++                <p className="text-sm text-slate-400">No active engagements.</p>
++              ) : null}
++            </div>
++          </div>
++
++          <div>
++            <p className="mb-2 text-sm font-semibold text-slate-700">Overdue Tasks</p>
++            <div className="space-y-1">
++              {data.overdue_tasks.length === 0 ? (
++                <p className="text-sm text-slate-400">Nothing overdue.</p>
++              ) : (
++                data.overdue_tasks.map((t) => (
++                  <p key={t.id} className="text-sm text-rose-600">
++                    {t.title} — due {formatDate(t.due_date)}
++                  </p>
++                ))
++              )}
++            </div>
++          </div>
++        </div>
++      ) : (
++        <p className="text-sm text-slate-400">Select a partner to view their engagement dashboard.</p>
++      )}
++    </div>
++  );
++}
++
++function ClientDashboardPanel() {
++  const [clients, setClients] = useState([]);
++  const [clientId, setClientId] = useState("");
++  const [data, setData] = useState(null);
++  const [loading, setLoading] = useState(false);
++  const [error, setError] = useState("");
++
++  useEffect(() => {
++    fetchClients().then(setClients).catch(() => setClients([]));
++  }, []);
++
++  useEffect(() => {
++    if (!clientId) {
++      setData(null);
++      return;
++    }
++    setLoading(true);
++    setError("");
++    fetchClientDashboard(clientId)
++      .then(setData)
++      .catch((err) => setError(err.message || "Failed to load client dashboard"))
++      .finally(() => setLoading(false));
++  }, [clientId]);
++
++  return (
++    <div className="space-y-4">
++      <select
++        value={clientId}
++        onChange={(e) => setClientId(e.target.value)}
++        className="w-full max-w-sm rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++      >
++        <option value="">Choose a client...</option>
++        {clients.map((c) => (
++          <option key={c.id} value={c.id}>
++            {c.first_name} {c.last_name}
++          </option>
++        ))}
++      </select>
++
++      {error ? (
++        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
++          {error}
++        </div>
++      ) : null}
++
++      {loading ? (
++        <p className="text-sm text-slate-500">Loading...</p>
++      ) : data ? (
++        <div className="space-y-4">
++          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
++            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
++              <p className="text-xs text-slate-500">Relationship Health</p>
++              <p className="mt-1 text-lg font-bold capitalize text-slate-900">{data.relationship_health}</p>
++            </div>
++            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
++              <p className="text-xs text-slate-500">Active Engagements</p>
++              <p className="mt-1 text-2xl font-bold text-slate-900">{data.active_engagement_count}</p>
++            </div>
++          </div>
++
++          {data.health_reasons?.length ? (
++            <ul className="list-disc pl-5 text-sm text-slate-600">
++              {data.health_reasons.map((r, i) => (
++                <li key={i}>{r}</li>
++              ))}
++            </ul>
++          ) : null}
++
++          <div>
++            <p className="mb-2 text-sm font-semibold text-slate-700">Engagements</p>
++            <div className="space-y-2">
++              {data.engagements.map((e) => (
++                <div key={e.id} className="rounded-xl border border-slate-200 bg-white p-3 text-sm">
++                  <p className="font-medium text-slate-800">{e.name}</p>
++                  <p className="mt-1 text-xs capitalize text-slate-500">
++                    {e.type.replace("_", " ")} · {e.status}
++                    {e.budget !== null ? ` · Budget ${formatMoney(e.budget)}` : ""}
++                  </p>
++                </div>
++              ))}
++              {data.engagements.length === 0 ? (
++                <p className="text-sm text-slate-400">No engagements yet.</p>
++              ) : null}
++            </div>
++          </div>
++
++          {data.contracts?.length ? (
++            <div>
++              <p className="mb-2 text-sm font-semibold text-slate-700">Contracts</p>
++              <div className="space-y-2">
++                {data.contracts.map((c) => (
++                  <div key={c.id} className="rounded-xl border border-slate-200 bg-white p-3 text-sm">
++                    <p className="font-medium text-slate-800">{c.name}</p>
++                    <p className="mt-1 text-xs capitalize text-slate-500">
++                      {c.billing_type.replace("_", " ")} · {formatMoney(c.value)} · {c.status}
++                    </p>
++                  </div>
++                ))}
++              </div>
++            </div>
++          ) : null}
++        </div>
++      ) : (
++        <p className="text-sm text-slate-400">Select a client to view their relationship dashboard.</p>
++      )}
++    </div>
++  );
++}
++
+ function formatDateTime(dateString) {
+   const date = new Date(dateString);
+   return date.toLocaleString();
+@@ -31,6 +268,7 @@ export default function ReportsPage() {
+   const [search, setSearch] = useState("");
+   const [actionFilter, setActionFilter] = useState("All");
+   const [exporting, setExporting] = useState("");
++  const [dashboardTab, setDashboardTab] = useState("partner");
+ 
+   async function handleExport(item) {
+     try {
+@@ -162,6 +400,36 @@ export default function ReportsPage() {
+         </div>
+       ) : null}
+ 
++      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
++        <h2 className="text-lg font-semibold text-slate-900">Engagement Dashboards</h2>
++        <p className="mt-1 text-sm text-slate-500">
++          Active engagements, upcoming deadlines, hours vs. budget, and relationship health.
++        </p>
++
++        <div className="mt-4 flex gap-2">
++          <button
++            onClick={() => setDashboardTab("partner")}
++            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
++              dashboardTab === "partner" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
++            }`}
++          >
++            Per-Partner
++          </button>
++          <button
++            onClick={() => setDashboardTab("client")}
++            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
++              dashboardTab === "client" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
++            }`}
++          >
++            Per-Client
++          </button>
++        </div>
++
++        <div className="mt-4">
++          {dashboardTab === "partner" ? <PartnerDashboardPanel /> : <ClientDashboardPanel />}
++        </div>
++      </div>
++
+       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+         <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+           <input
+diff --git a/src/app/dashboard/tasks/page.js b/src/app/dashboard/tasks/page.js
+index df8c61b..a674c44 100644
+--- a/src/app/dashboard/tasks/page.js
++++ b/src/app/dashboard/tasks/page.js
+@@ -8,17 +8,30 @@ import {
+   fetchTasks,
+   fetchUsers,
+   updateTask,
++  fetchProjects,
++  fetchTaskDetail,
++  fetchTaskDependencies,
++  addTaskDependency,
++  deleteTaskDependency,
++  fetchTaskTemplates,
++  createTaskTemplate,
+ } from "@/lib/api";
+ 
+ const initialForm = {
+   title: "",
+   description: "",
+   client_id: "",
++  project_id: "",
++  parent_task_id: "",
+   assigned_to_email: "",
+   priority: "medium",
+   due_date: "",
++  recurrence_rule: "",
++  recurrence_end_date: "",
+ };
+ 
++const RECURRENCE_OPTIONS = ["", "daily", "weekly", "monthly"];
++
+ const STATUS_LABELS = {
+   open: "Open",
+   in_progress: "In Progress",
+@@ -42,6 +55,21 @@ export default function TasksPage() {
+   const [showModal, setShowModal] = useState(false);
+   const [form, setForm] = useState(initialForm);
+ 
++  const [projects, setProjects] = useState([]);
++  const [detailTask, setDetailTask] = useState(null);
++  const [taskDetail, setTaskDetail] = useState(null);
++  const [dependencies, setDependencies] = useState([]);
++  const [depToAdd, setDepToAdd] = useState("");
++  const [detailLoading, setDetailLoading] = useState(false);
++
++  const [templates, setTemplates] = useState([]);
++  const [showTemplateModal, setShowTemplateModal] = useState(false);
++  const [templateForm, setTemplateForm] = useState({ name: "", engagement_type: "", description: "" });
++  const [templateItems, setTemplateItems] = useState([
++    { title: "", relative_due_days: "", priority: "medium" },
++  ]);
++  const [savingTemplate, setSavingTemplate] = useState(false);
++
+   async function loadTasks(status = statusFilter) {
+     try {
+       setLoading(true);
+@@ -62,6 +90,8 @@ export default function TasksPage() {
+     // simply won't get an assignee picker.
+     fetchUsers().then(setUsers).catch(() => setUsers([]));
+     fetchClients().then(setClients).catch(() => setClients([]));
++    fetchProjects().then(setProjects).catch(() => setProjects([]));
++    fetchTaskTemplates().then(setTemplates).catch(() => setTemplates([]));
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, []);
+ 
+@@ -83,9 +113,15 @@ export default function TasksPage() {
+         title: form.title,
+         description: form.description || undefined,
+         client_id: form.client_id ? Number(form.client_id) : undefined,
++        project_id: form.project_id ? Number(form.project_id) : undefined,
++        parent_task_id: form.parent_task_id ? Number(form.parent_task_id) : undefined,
+         assigned_to_email: form.assigned_to_email || undefined,
+         priority: form.priority,
+         due_date: form.due_date ? new Date(form.due_date).toISOString() : undefined,
++        recurrence_rule: form.recurrence_rule || undefined,
++        recurrence_end_date: form.recurrence_end_date
++          ? new Date(form.recurrence_end_date).toISOString()
++          : undefined,
+       };
+       await createTask(payload);
+       setForm(initialForm);
+@@ -118,6 +154,102 @@ export default function TasksPage() {
+     }
+   }
+ 
++  async function openTaskDetail(task) {
++    setDetailTask(task);
++    setDetailLoading(true);
++    try {
++      const [detail, deps] = await Promise.all([
++        fetchTaskDetail(task.id),
++        fetchTaskDependencies(task.id),
++      ]);
++      setTaskDetail(detail);
++      setDependencies(deps);
++    } catch (err) {
++      setError(err.message || "Failed to load task detail");
++    } finally {
++      setDetailLoading(false);
++    }
++  }
++
++  function closeTaskDetail() {
++    setDetailTask(null);
++    setTaskDetail(null);
++    setDependencies([]);
++    setDepToAdd("");
++  }
++
++  async function handleAddDependency() {
++    if (!detailTask || !depToAdd) return;
++    try {
++      setError("");
++      await addTaskDependency(detailTask.id, Number(depToAdd));
++      setDepToAdd("");
++      await openTaskDetail(detailTask);
++    } catch (err) {
++      setError(err.message || "Failed to add dependency");
++    }
++  }
++
++  async function handleRemoveDependency(dependencyId) {
++    if (!detailTask) return;
++    try {
++      setError("");
++      await deleteTaskDependency(detailTask.id, dependencyId);
++      await openTaskDetail(detailTask);
++    } catch (err) {
++      setError(err.message || "Failed to remove dependency");
++    }
++  }
++
++  function taskTitle(taskId) {
++    const match = tasks.find((t) => t.id === taskId);
++    return match ? match.title : `#${taskId}`;
++  }
++
++  function addTemplateItem() {
++    setTemplateItems((prev) => [...prev, { title: "", relative_due_days: "", priority: "medium" }]);
++  }
++
++  function updateTemplateItem(index, field, value) {
++    setTemplateItems((prev) =>
++      prev.map((item, i) => (i === index ? { ...item, [field]: value } : item))
++    );
++  }
++
++  function removeTemplateItem(index) {
++    setTemplateItems((prev) => prev.filter((_, i) => i !== index));
++  }
++
++  async function handleCreateTemplate(e) {
++    e.preventDefault();
++    try {
++      setSavingTemplate(true);
++      setError("");
++      await createTaskTemplate({
++        name: templateForm.name,
++        engagement_type: templateForm.engagement_type || undefined,
++        description: templateForm.description || undefined,
++        items: templateItems
++          .filter((i) => i.title.trim())
++          .map((i, idx) => ({
++            title: i.title,
++            priority: i.priority,
++            relative_due_days: i.relative_due_days !== "" ? Number(i.relative_due_days) : undefined,
++            order_index: idx,
++          })),
++      });
++      setTemplateForm({ name: "", engagement_type: "", description: "" });
++      setTemplateItems([{ title: "", relative_due_days: "", priority: "medium" }]);
++      setShowTemplateModal(false);
++      const updated = await fetchTaskTemplates();
++      setTemplates(updated);
++    } catch (err) {
++      setError(err.message || "Failed to create template");
++    } finally {
++      setSavingTemplate(false);
++    }
++  }
++
+   function clientLabel(clientId) {
+     const match = clients.find((c) => c.id === clientId);
+     return match ? `${match.first_name} ${match.last_name}` : null;
+@@ -137,12 +269,20 @@ export default function TasksPage() {
+           </p>
+         </div>
+ 
+-        <button
+-          onClick={() => setShowModal(true)}
+-          className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
+-        >
+-          New Task
+-        </button>
++        <div className="flex gap-3">
++          <button
++            onClick={() => setShowTemplateModal(true)}
++            className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
++          >
++            New Template
++          </button>
++          <button
++            onClick={() => setShowModal(true)}
++            className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
++          >
++            New Task
++          </button>
++        </div>
+       </div>
+ 
+       {error ? (
+@@ -198,10 +338,18 @@ export default function TasksPage() {
+                 tasks.map((task) => (
+                   <tr key={task.id} className="bg-slate-50 align-top">
+                     <td className="rounded-l-2xl px-4 py-4">
+-                      <p className="font-medium text-slate-900">{task.title}</p>
++                      <p className="font-medium text-slate-900">
++                        {task.parent_task_id ? <span className="mr-1 text-slate-400">↳</span> : null}
++                        {task.title}
++                      </p>
+                       {task.description && (
+                         <p className="mt-1 max-w-xs text-xs text-slate-500">{task.description}</p>
+                       )}
++                      {task.recurrence_rule && (
++                        <span className="mt-1 inline-block rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">
++                          Recurs {task.recurrence_rule}
++                        </span>
++                      )}
+                     </td>
+                     <td className="px-4 py-4 text-sm text-slate-700">
+                       {task.client_id ? clientLabel(task.client_id) || `#${task.client_id}` : "—"}
+@@ -237,12 +385,20 @@ export default function TasksPage() {
+                       </select>
+                     </td>
+                     <td className="rounded-r-2xl px-4 py-4">
+-                      <button
+-                        onClick={() => handleDelete(task.id)}
+-                        className="text-sm font-semibold text-rose-600 hover:underline"
+-                      >
+-                        Delete
+-                      </button>
++                      <div className="flex gap-3">
++                        <button
++                          onClick={() => openTaskDetail(task)}
++                          className="text-sm font-semibold text-slate-700 hover:underline"
++                        >
++                          Detail
++                        </button>
++                        <button
++                          onClick={() => handleDelete(task.id)}
++                          className="text-sm font-semibold text-rose-600 hover:underline"
++                        >
++                          Delete
++                        </button>
++                      </div>
+                     </td>
+                   </tr>
+                 ))
+@@ -311,6 +467,25 @@ export default function TasksPage() {
+                   </select>
+                 </div>
+ 
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">Engagement</label>
++                  <select
++                    name="project_id"
++                    value={form.project_id}
++                    onChange={handleInputChange}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  >
++                    <option value="">None</option>
++                    {projects.map((p) => (
++                      <option key={p.id} value={p.id}>
++                        {p.name}
++                      </option>
++                    ))}
++                  </select>
++                </div>
++              </div>
++
++              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                 <div>
+                   <label className="mb-2 block text-sm font-medium text-slate-700">Assign To</label>
+                   <select
+@@ -327,6 +502,23 @@ export default function TasksPage() {
+                     ))}
+                   </select>
+                 </div>
++
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">Parent Task (subtask of)</label>
++                  <select
++                    name="parent_task_id"
++                    value={form.parent_task_id}
++                    onChange={handleInputChange}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  >
++                    <option value="">None (top-level task)</option>
++                    {tasks.map((t) => (
++                      <option key={t.id} value={t.id}>
++                        {t.title}
++                      </option>
++                    ))}
++                  </select>
++                </div>
+               </div>
+ 
+               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+@@ -356,6 +548,37 @@ export default function TasksPage() {
+                 </div>
+               </div>
+ 
++              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">Recurrence</label>
++                  <select
++                    name="recurrence_rule"
++                    value={form.recurrence_rule}
++                    onChange={handleInputChange}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  >
++                    {RECURRENCE_OPTIONS.map((r) => (
++                      <option key={r || "none"} value={r}>
++                        {r ? r.charAt(0).toUpperCase() + r.slice(1) : "None"}
++                      </option>
++                    ))}
++                  </select>
++                </div>
++
++                {form.recurrence_rule ? (
++                  <div>
++                    <label className="mb-2 block text-sm font-medium text-slate-700">Recurrence Ends</label>
++                    <input
++                      type="date"
++                      name="recurrence_end_date"
++                      value={form.recurrence_end_date}
++                      onChange={handleInputChange}
++                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                    />
++                  </div>
++                ) : null}
++              </div>
++
+               <div className="flex justify-end gap-3 pt-2">
+                 <button
+                   type="button"
+@@ -376,6 +599,212 @@ export default function TasksPage() {
+           </div>
+         </div>
+       ) : null}
++
++      {detailTask ? (
++        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
++          <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl">
++            <div className="mb-4 flex items-start justify-between gap-4">
++              <div>
++                <h2 className="text-xl font-bold text-slate-900">{detailTask.title}</h2>
++                <p className="mt-1 text-sm text-slate-500">Subtasks, dependencies &amp; blockers</p>
++              </div>
++              <button
++                onClick={closeTaskDetail}
++                className="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-600 hover:bg-slate-100"
++              >
++                Close
++              </button>
++            </div>
++
++            {detailLoading ? (
++              <p className="text-sm text-slate-500">Loading...</p>
++            ) : taskDetail ? (
++              <div className="space-y-4">
++                {taskDetail.is_blocked ? (
++                  <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
++                    This task is blocked — one or more prerequisites aren&apos;t done yet.
++                  </div>
++                ) : null}
++
++                <div className="grid grid-cols-2 gap-3 text-sm">
++                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
++                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Subtasks</p>
++                    <p className="mt-1 text-slate-800">
++                      {taskDetail.open_subtask_count} open / {taskDetail.subtask_count} total
++                    </p>
++                  </div>
++                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
++                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Status</p>
++                    <p className="mt-1 capitalize text-slate-800">{STATUS_LABELS[taskDetail.status]}</p>
++                  </div>
++                </div>
++
++                <div>
++                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
++                    Blocked By (this task waits on)
++                  </p>
++                  <div className="mt-2 space-y-2">
++                    {dependencies.length === 0 ? (
++                      <p className="text-sm text-slate-400">No dependencies.</p>
++                    ) : (
++                      dependencies.map((dep) => (
++                        <div
++                          key={dep.id}
++                          className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"
++                        >
++                          <span className="text-sm text-slate-700">{taskTitle(dep.depends_on_task_id)}</span>
++                          <button
++                            onClick={() => handleRemoveDependency(dep.id)}
++                            className="text-xs font-semibold text-rose-500 hover:underline"
++                          >
++                            Remove
++                          </button>
++                        </div>
++                      ))
++                    )}
++                  </div>
++                  <div className="mt-2 flex gap-2">
++                    <select
++                      value={depToAdd}
++                      onChange={(e) => setDepToAdd(e.target.value)}
++                      className="flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
++                    >
++                      <option value="">Add a dependency...</option>
++                      {tasks
++                        .filter((t) => t.id !== detailTask.id)
++                        .map((t) => (
++                          <option key={t.id} value={t.id}>
++                            {t.title}
++                          </option>
++                        ))}
++                    </select>
++                    <button
++                      onClick={handleAddDependency}
++                      disabled={!depToAdd}
++                      className="rounded-xl border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
++                    >
++                      Add
++                    </button>
++                  </div>
++                </div>
++
++                {taskDetail.blocks.length > 0 ? (
++                  <div>
++                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
++                      Blocks (waiting on this task)
++                    </p>
++                    <div className="mt-2 space-y-1">
++                      {taskDetail.blocks.map((id) => (
++                        <p key={id} className="text-sm text-slate-700">
++                          {taskTitle(id)}
++                        </p>
++                      ))}
++                    </div>
++                  </div>
++                ) : null}
++              </div>
++            ) : null}
++          </div>
++        </div>
++      ) : null}
++
++      {showTemplateModal ? (
++        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
++          <div className="max-h-[85vh] w-full max-w-xl overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl">
++            <div className="mb-4 flex items-start justify-between gap-4">
++              <div>
++                <h2 className="text-xl font-bold text-slate-900">New Task Template</h2>
++                <p className="mt-1 text-sm text-slate-500">
++                  A standard checklist (e.g. an audit kickoff) you can clone onto any engagement.
++                </p>
++              </div>
++              <button
++                onClick={() => setShowTemplateModal(false)}
++                className="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-600 hover:bg-slate-100"
++              >
++                Close
++              </button>
++            </div>
++
++            <form onSubmit={handleCreateTemplate} className="space-y-4">
++              <input
++                placeholder="Template name"
++                value={templateForm.name}
++                onChange={(e) => setTemplateForm((p) => ({ ...p, name: e.target.value }))}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                required
++              />
++              <input
++                placeholder="Engagement type (e.g. audit)"
++                value={templateForm.engagement_type}
++                onChange={(e) => setTemplateForm((p) => ({ ...p, engagement_type: e.target.value }))}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++              />
++              <textarea
++                placeholder="Description (optional)"
++                value={templateForm.description}
++                onChange={(e) => setTemplateForm((p) => ({ ...p, description: e.target.value }))}
++                rows={2}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++              />
++
++              <div>
++                <p className="mb-2 text-sm font-medium text-slate-700">Checklist Items</p>
++                <div className="space-y-2">
++                  {templateItems.map((item, index) => (
++                    <div key={index} className="flex gap-2">
++                      <input
++                        placeholder="Item title"
++                        value={item.title}
++                        onChange={(e) => updateTemplateItem(index, "title", e.target.value)}
++                        className="flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
++                      />
++                      <input
++                        type="number"
++                        placeholder="Due (days)"
++                        value={item.relative_due_days}
++                        onChange={(e) => updateTemplateItem(index, "relative_due_days", e.target.value)}
++                        className="w-28 rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
++                      />
++                      <button
++                        type="button"
++                        onClick={() => removeTemplateItem(index)}
++                        className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50"
++                      >
++                        ✕
++                      </button>
++                    </div>
++                  ))}
++                </div>
++                <button
++                  type="button"
++                  onClick={addTemplateItem}
++                  className="mt-2 text-sm font-semibold text-slate-700 hover:underline"
++                >
++                  + Add item
++                </button>
++              </div>
++
++              <div className="flex justify-end gap-3 pt-2">
++                <button
++                  type="button"
++                  onClick={() => setShowTemplateModal(false)}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
++                >
++                  Cancel
++                </button>
++                <button
++                  type="submit"
++                  disabled={savingTemplate}
++                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-70"
++                >
++                  {savingTemplate ? "Saving..." : "Create Template"}
++                </button>
++              </div>
++            </form>
++          </div>
++        </div>
++      ) : null}
+     </div>
+   );
+ }
+diff --git a/src/lib/api.js b/src/lib/api.js
+index abdf87a..36bae03 100644
+--- a/src/lib/api.js
++++ b/src/lib/api.js
+@@ -584,3 +584,104 @@ export const resetPassword = (token, newPassword) =>
+   apiSend("/auth/reset-password", "POST", { token, new_password: newPassword });
+ export const requestEmailVerification = () => apiSend("/auth/request-verification", "POST");
+ export const verifyEmail = (token) => apiSend("/auth/verify-email", "POST", { token });
++
++// --- Projects / Engagements ------------------------------------------------------
++
++export function fetchProjects(params = {}) {
++  const searchParams = new URLSearchParams();
++  if (params.client_id) searchParams.append("client_id", params.client_id);
++  if (params.status) searchParams.append("status", params.status);
++  if (params.type) searchParams.append("type", params.type);
++  if (params.risk_level) searchParams.append("risk_level", params.risk_level);
++  if (params.engagement_partner_email) {
++    searchParams.append("engagement_partner_email", params.engagement_partner_email);
++  }
++  const qs = searchParams.toString();
++  return apiGet(`/projects/${qs ? `?${qs}` : ""}`);
++}
++export const fetchProject = (id) => apiGet(`/projects/${id}`);
++export const createProject = (payload) => apiSend("/projects/", "POST", payload);
++export const updateProject = (id, payload) => apiSend(`/projects/${id}`, "PUT", payload);
++export const deleteProject = (id) => apiDelete(`/projects/${id}`);
++
++// --- Client contacts & hierarchy --------------------------------------------------
++
++export const fetchClientContacts = (clientId) => apiGet(`/clients/${clientId}/contacts`);
++export const createClientContact = (clientId, payload) =>
++  apiSend(`/clients/${clientId}/contacts`, "POST", payload);
++export const updateClientContact = (clientId, contactId, payload) =>
++  apiSend(`/clients/${clientId}/contacts/${contactId}`, "PUT", payload);
++export const deleteClientContact = (clientId, contactId) =>
++  apiDelete(`/clients/${clientId}/contacts/${contactId}`);
++export const fetchClientHealth = (clientId) => apiGet(`/clients/${clientId}/health`);
++
++// --- Contracts / SOWs ---------------------------------------------------------------
++
++export function fetchContracts(params = {}) {
++  const searchParams = new URLSearchParams();
++  if (params.project_id) searchParams.append("project_id", params.project_id);
++  if (params.status) searchParams.append("status", params.status);
++  if (params.billing_type) searchParams.append("billing_type", params.billing_type);
++  const qs = searchParams.toString();
++  return apiGet(`/contracts/${qs ? `?${qs}` : ""}`);
++}
++export const createContract = (payload) => apiSend("/contracts/", "POST", payload);
++export const updateContract = (id, payload) => apiSend(`/contracts/${id}`, "PUT", payload);
++export const deleteContract = (id) => apiDelete(`/contracts/${id}`);
++export const fetchContractMargin = (id) => apiGet(`/contracts/${id}/margin`);
++
++// --- Milestones ----------------------------------------------------------------------
++
++export function fetchMilestones(params = {}) {
++  const searchParams = new URLSearchParams();
++  if (params.project_id) searchParams.append("project_id", params.project_id);
++  if (params.status) searchParams.append("status", params.status);
++  const qs = searchParams.toString();
++  return apiGet(`/milestones/${qs ? `?${qs}` : ""}`);
++}
++export const createMilestone = (payload) => apiSend("/milestones/", "POST", payload);
++export const updateMilestone = (id, payload) => apiSend(`/milestones/${id}`, "PUT", payload);
++export const deleteMilestone = (id) => apiDelete(`/milestones/${id}`);
++
++// --- Task templates ------------------------------------------------------------------
++
++export const fetchTaskTemplates = () => apiGet("/task-templates/");
++export const createTaskTemplate = (payload) => apiSend("/task-templates/", "POST", payload);
++export const updateTaskTemplate = (id, payload) => apiSend(`/task-templates/${id}`, "PUT", payload);
++export const deleteTaskTemplate = (id) => apiDelete(`/task-templates/${id}`);
++export const applyTaskTemplate = (id, payload) =>
++  apiSend(`/task-templates/${id}/apply`, "POST", payload);
++
++// --- Task detail, subtasks & dependencies ---------------------------------------------
++
++export const fetchTaskDetail = (taskId) => apiGet(`/tasks/${taskId}/detail`);
++export const fetchTaskDependencies = (taskId) => apiGet(`/tasks/${taskId}/dependencies`);
++export const addTaskDependency = (taskId, dependsOnTaskId) =>
++  apiSend(`/tasks/${taskId}/dependencies`, "POST", { depends_on_task_id: dependsOnTaskId });
++export const deleteTaskDependency = (taskId, dependencyId) =>
++  apiDelete(`/tasks/${taskId}/dependencies/${dependencyId}`);
++
++// --- Time tracking ---------------------------------------------------------------------
++
++export function fetchTimeEntries(params = {}) {
++  const searchParams = new URLSearchParams();
++  if (params.project_id) searchParams.append("project_id", params.project_id);
++  if (params.task_id) searchParams.append("task_id", params.task_id);
++  if (params.user_email) searchParams.append("user_email", params.user_email);
++  if (params.billable !== undefined) searchParams.append("billable", String(params.billable));
++  if (params.date_from) searchParams.append("date_from", params.date_from);
++  if (params.date_to) searchParams.append("date_to", params.date_to);
++  const qs = searchParams.toString();
++  return apiGet(`/time-entries/${qs ? `?${qs}` : ""}`);
++}
++export const createTimeEntry = (payload) => apiSend("/time-entries/", "POST", payload);
++export const updateTimeEntry = (id, payload) => apiSend(`/time-entries/${id}`, "PUT", payload);
++export const deleteTimeEntry = (id) => apiDelete(`/time-entries/${id}`);
++export const fetchProjectUtilization = (projectId) =>
++  apiGet(`/time-entries/summary?project_id=${projectId}`);
++
++// --- Dashboards --------------------------------------------------------------------------
++
++export const fetchPartnerDashboard = (partnerEmail) =>
++  apiGet(`/reports/dashboard/partner?partner_email=${encodeURIComponent(partnerEmail)}`);
++export const fetchClientDashboard = (clientId) => apiGet(`/reports/dashboard/client/${clientId}`);
+diff --git a/src/lib/nav.js b/src/lib/nav.js
+index 48aa467..ee7856b 100644
+--- a/src/lib/nav.js
++++ b/src/lib/nav.js
+@@ -5,6 +5,7 @@ import {
+   BarChart3,
+   ShieldCheck,
+   ListChecks,
++  Briefcase,
+ } from "lucide-react";
+ 
+ export const navItems = [
+@@ -20,6 +21,12 @@ export const navItems = [
+     icon: Users,
+     roles: ["admin", "staff"],
+   },
++  {
++    label: "Projects",
++    href: "/dashboard/projects",
++    icon: Briefcase,
++    roles: ["admin", "staff"],
++  },
+   {
+     label: "Tasks",
+     href: "/dashboard/tasks",

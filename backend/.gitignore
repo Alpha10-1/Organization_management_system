@@ -1,0 +1,15 @@
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+
+# local sqlite db (regenerate via alembic upgrade head)
+organization.db
+test.db
+*.db-journal
+
+# env
+.env
+.env.local

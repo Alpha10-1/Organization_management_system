@@ -15,7 +15,20 @@ import {
   addClientNote,
   deleteClientNote,
   bulkUpdateClientStatus,
+  fetchClientContacts,
+  createClientContact,
+  updateClientContact,
+  deleteClientContact,
+  fetchClientHealth,
 } from "@/lib/api";
+
+const HEALTH_STYLES = {
+  green: "bg-emerald-100 text-emerald-700",
+  amber: "bg-amber-100 text-amber-700",
+  red: "bg-rose-100 text-rose-700",
+};
+
+const initialContactForm = { name: "", role: "", email: "", phone: "", is_primary: false };
 
 const initialForm = {
   first_name: "",
@@ -25,6 +38,7 @@ const initialForm = {
   status: "Active",
   notes: "",
   department_id: "",
+  parent_client_id: "",
 };
 
 export default function ClientsPage() {
@@ -51,6 +65,11 @@ export default function ClientsPage() {
   const [notes, setNotes] = useState([]);
   const [newNote, setNewNote] = useState("");
   const [notesLoading, setNotesLoading] = useState(false);
+
+  const [contacts, setContacts] = useState([]);
+  const [contactForm, setContactForm] = useState(initialContactForm);
+  const [editingContactId, setEditingContactId] = useState(null);
+  const [health, setHealth] = useState(null);
 
   async function loadClients(currentSearch = search, currentStatus = statusFilter) {
     try {
@@ -80,6 +99,8 @@ export default function ClientsPage() {
     if (!selectedClient) {
       setClientTags([]);
       setNotes([]);
+      setContacts([]);
+      setHealth(null);
       return;
     }
 
@@ -90,7 +111,63 @@ export default function ClientsPage() {
       .then(setNotes)
       .catch(() => setNotes([]))
       .finally(() => setNotesLoading(false));
+
+    fetchClientContacts(selectedClient.id).then(setContacts).catch(() => setContacts([]));
+    fetchClientHealth(selectedClient.id).then(setHealth).catch(() => setHealth(null));
   }, [selectedClient]);
+
+  function resetContactForm() {
+    setContactForm(initialContactForm);
+    setEditingContactId(null);
+  }
+
+  function startEditContact(contact) {
+    setEditingContactId(contact.id);
+    setContactForm({
+      name: contact.name,
+      role: contact.role || "",
+      email: contact.email || "",
+      phone: contact.phone || "",
+      is_primary: contact.is_primary,
+    });
+  }
+
+  async function handleContactSubmit(e) {
+    e.preventDefault();
+    if (!selectedClient) return;
+    try {
+      setError("");
+      const payload = {
+        name: contactForm.name,
+        role: contactForm.role || undefined,
+        email: contactForm.email || undefined,
+        phone: contactForm.phone || undefined,
+        is_primary: contactForm.is_primary,
+      };
+      if (editingContactId) {
+        await updateClientContact(selectedClient.id, editingContactId, payload);
+      } else {
+        await createClientContact(selectedClient.id, payload);
+      }
+      resetContactForm();
+      const updated = await fetchClientContacts(selectedClient.id);
+      setContacts(updated);
+    } catch (err) {
+      setError(err.message || "Failed to save contact");
+    }
+  }
+
+  async function handleDeleteContact(contactId) {
+    if (!selectedClient) return;
+    try {
+      setError("");
+      await deleteClientContact(selectedClient.id, contactId);
+      const updated = await fetchClientContacts(selectedClient.id);
+      setContacts(updated);
+    } catch (err) {
+      setError(err.message || "Failed to delete contact");
+    }
+  }
 
   function toggleSelected(clientId) {
     setSelectedIds((prev) =>
@@ -203,6 +280,7 @@ export default function ClientsPage() {
       status: client.status || "Active",
       notes: client.notes || "",
       department_id: client.department_id ?? "",
+      parent_client_id: client.parent_client_id ?? "",
     });
     setShowModal(true);
   }
@@ -223,6 +301,7 @@ export default function ClientsPage() {
       const payload = {
         ...form,
         department_id: form.department_id ? Number(form.department_id) : null,
+        parent_client_id: form.parent_client_id ? Number(form.parent_client_id) : null,
       };
 
       if (editingClient) {
@@ -472,6 +551,31 @@ export default function ClientsPage() {
 
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Relationship Health
+                </p>
+                {health ? (
+                  <div className="mt-1 flex items-center gap-2">
+                    <span
+                      className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${HEALTH_STYLES[health.health] || HEALTH_STYLES.green}`}
+                    >
+                      {health.health}
+                      {health.is_manual_override ? " (manual)" : ""}
+                    </span>
+                  </div>
+                ) : (
+                  <p className="mt-1 text-sm text-slate-400">—</p>
+                )}
+                {health?.reasons?.length ? (
+                  <ul className="mt-2 list-disc pl-4 text-xs text-slate-500">
+                    {health.reasons.map((r, i) => (
+                      <li key={i}>{r}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                   Phone
                 </p>
                 <p className="mt-1 text-sm text-slate-800">{selectedClient.phone || "-"}</p>
@@ -589,6 +693,111 @@ export default function ClientsPage() {
                   )}
                 </div>
               </div>
+
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Contacts
+                </p>
+                <div className="mt-2 space-y-2">
+                  {contacts.length === 0 ? (
+                    <p className="text-sm text-slate-400">No contacts added yet.</p>
+                  ) : (
+                    contacts.map((contact) => (
+                      <div
+                        key={contact.id}
+                        className="flex items-start justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3"
+                      >
+                        <div>
+                          <p className="text-sm font-medium text-slate-800">
+                            {contact.name}
+                            {contact.is_primary ? (
+                              <span className="ml-2 rounded-full bg-slate-900 px-2 py-0.5 text-[10px] font-semibold text-white">
+                                Primary
+                              </span>
+                            ) : null}
+                          </p>
+                          <p className="text-xs text-slate-500">{contact.role || "—"}</p>
+                          <p className="text-xs text-slate-500">
+                            {contact.email || "—"} {contact.phone ? `· ${contact.phone}` : ""}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 gap-2">
+                          <button
+                            onClick={() => startEditContact(contact)}
+                            className="text-xs font-semibold text-slate-700 hover:underline"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => handleDeleteContact(contact.id)}
+                            className="text-xs font-semibold text-rose-500 hover:underline"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <form onSubmit={handleContactSubmit} className="mt-3 space-y-2 rounded-xl border border-slate-200 bg-white p-3">
+                  <p className="text-xs font-semibold text-slate-600">
+                    {editingContactId ? "Edit Contact" : "Add Contact"}
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      placeholder="Name"
+                      value={contactForm.name}
+                      onChange={(e) => setContactForm((p) => ({ ...p, name: e.target.value }))}
+                      className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
+                      required
+                    />
+                    <input
+                      placeholder="Role (e.g. CFO)"
+                      value={contactForm.role}
+                      onChange={(e) => setContactForm((p) => ({ ...p, role: e.target.value }))}
+                      className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
+                    />
+                    <input
+                      placeholder="Email"
+                      value={contactForm.email}
+                      onChange={(e) => setContactForm((p) => ({ ...p, email: e.target.value }))}
+                      className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
+                    />
+                    <input
+                      placeholder="Phone"
+                      value={contactForm.phone}
+                      onChange={(e) => setContactForm((p) => ({ ...p, phone: e.target.value }))}
+                      className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 text-xs text-slate-600">
+                    <input
+                      type="checkbox"
+                      checked={contactForm.is_primary}
+                      onChange={(e) => setContactForm((p) => ({ ...p, is_primary: e.target.checked }))}
+                    />
+                    Primary contact
+                  </label>
+                  <div className="flex justify-end gap-2">
+                    {editingContactId ? (
+                      <button
+                        type="button"
+                        onClick={resetContactForm}
+                        className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                      >
+                        Cancel
+                      </button>
+                    ) : null}
+                    <button
+                      type="submit"
+                      className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                    >
+                      {editingContactId ? "Save" : "Add Contact"}
+                    </button>
+                  </div>
+                </form>
+              </div>
             </div>
           ) : (
             <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-sm text-slate-500">
@@ -705,6 +914,27 @@ export default function ClientsPage() {
                       {d.name}
                     </option>
                   ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-700">
+                  Parent Client (group structure)
+                </label>
+                <select
+                  name="parent_client_id"
+                  value={form.parent_client_id}
+                  onChange={handleInputChange}
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                >
+                  <option value="">None (standalone)</option>
+                  {clients
+                    .filter((c) => !editingClient || c.id !== editingClient.id)
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.first_name} {c.last_name}
+                      </option>
+                    ))}
                 </select>
               </div>
 

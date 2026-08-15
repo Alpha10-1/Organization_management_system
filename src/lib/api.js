@@ -584,3 +584,104 @@ export const resetPassword = (token, newPassword) =>
   apiSend("/auth/reset-password", "POST", { token, new_password: newPassword });
 export const requestEmailVerification = () => apiSend("/auth/request-verification", "POST");
 export const verifyEmail = (token) => apiSend("/auth/verify-email", "POST", { token });
+
+// --- Projects / Engagements ------------------------------------------------------
+
+export function fetchProjects(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.client_id) searchParams.append("client_id", params.client_id);
+  if (params.status) searchParams.append("status", params.status);
+  if (params.type) searchParams.append("type", params.type);
+  if (params.risk_level) searchParams.append("risk_level", params.risk_level);
+  if (params.engagement_partner_email) {
+    searchParams.append("engagement_partner_email", params.engagement_partner_email);
+  }
+  const qs = searchParams.toString();
+  return apiGet(`/projects/${qs ? `?${qs}` : ""}`);
+}
+export const fetchProject = (id) => apiGet(`/projects/${id}`);
+export const createProject = (payload) => apiSend("/projects/", "POST", payload);
+export const updateProject = (id, payload) => apiSend(`/projects/${id}`, "PUT", payload);
+export const deleteProject = (id) => apiDelete(`/projects/${id}`);
+
+// --- Client contacts & hierarchy --------------------------------------------------
+
+export const fetchClientContacts = (clientId) => apiGet(`/clients/${clientId}/contacts`);
+export const createClientContact = (clientId, payload) =>
+  apiSend(`/clients/${clientId}/contacts`, "POST", payload);
+export const updateClientContact = (clientId, contactId, payload) =>
+  apiSend(`/clients/${clientId}/contacts/${contactId}`, "PUT", payload);
+export const deleteClientContact = (clientId, contactId) =>
+  apiDelete(`/clients/${clientId}/contacts/${contactId}`);
+export const fetchClientHealth = (clientId) => apiGet(`/clients/${clientId}/health`);
+
+// --- Contracts / SOWs ---------------------------------------------------------------
+
+export function fetchContracts(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.project_id) searchParams.append("project_id", params.project_id);
+  if (params.status) searchParams.append("status", params.status);
+  if (params.billing_type) searchParams.append("billing_type", params.billing_type);
+  const qs = searchParams.toString();
+  return apiGet(`/contracts/${qs ? `?${qs}` : ""}`);
+}
+export const createContract = (payload) => apiSend("/contracts/", "POST", payload);
+export const updateContract = (id, payload) => apiSend(`/contracts/${id}`, "PUT", payload);
+export const deleteContract = (id) => apiDelete(`/contracts/${id}`);
+export const fetchContractMargin = (id) => apiGet(`/contracts/${id}/margin`);
+
+// --- Milestones ----------------------------------------------------------------------
+
+export function fetchMilestones(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.project_id) searchParams.append("project_id", params.project_id);
+  if (params.status) searchParams.append("status", params.status);
+  const qs = searchParams.toString();
+  return apiGet(`/milestones/${qs ? `?${qs}` : ""}`);
+}
+export const createMilestone = (payload) => apiSend("/milestones/", "POST", payload);
+export const updateMilestone = (id, payload) => apiSend(`/milestones/${id}`, "PUT", payload);
+export const deleteMilestone = (id) => apiDelete(`/milestones/${id}`);
+
+// --- Task templates ------------------------------------------------------------------
+
+export const fetchTaskTemplates = () => apiGet("/task-templates/");
+export const createTaskTemplate = (payload) => apiSend("/task-templates/", "POST", payload);
+export const updateTaskTemplate = (id, payload) => apiSend(`/task-templates/${id}`, "PUT", payload);
+export const deleteTaskTemplate = (id) => apiDelete(`/task-templates/${id}`);
+export const applyTaskTemplate = (id, payload) =>
+  apiSend(`/task-templates/${id}/apply`, "POST", payload);
+
+// --- Task detail, subtasks & dependencies ---------------------------------------------
+
+export const fetchTaskDetail = (taskId) => apiGet(`/tasks/${taskId}/detail`);
+export const fetchTaskDependencies = (taskId) => apiGet(`/tasks/${taskId}/dependencies`);
+export const addTaskDependency = (taskId, dependsOnTaskId) =>
+  apiSend(`/tasks/${taskId}/dependencies`, "POST", { depends_on_task_id: dependsOnTaskId });
+export const deleteTaskDependency = (taskId, dependencyId) =>
+  apiDelete(`/tasks/${taskId}/dependencies/${dependencyId}`);
+
+// --- Time tracking ---------------------------------------------------------------------
+
+export function fetchTimeEntries(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.project_id) searchParams.append("project_id", params.project_id);
+  if (params.task_id) searchParams.append("task_id", params.task_id);
+  if (params.user_email) searchParams.append("user_email", params.user_email);
+  if (params.billable !== undefined) searchParams.append("billable", String(params.billable));
+  if (params.date_from) searchParams.append("date_from", params.date_from);
+  if (params.date_to) searchParams.append("date_to", params.date_to);
+  const qs = searchParams.toString();
+  return apiGet(`/time-entries/${qs ? `?${qs}` : ""}`);
+}
+export const createTimeEntry = (payload) => apiSend("/time-entries/", "POST", payload);
+export const updateTimeEntry = (id, payload) => apiSend(`/time-entries/${id}`, "PUT", payload);
+export const deleteTimeEntry = (id) => apiDelete(`/time-entries/${id}`);
+export const fetchProjectUtilization = (projectId) =>
+  apiGet(`/time-entries/summary?project_id=${projectId}`);
+
+// --- Dashboards --------------------------------------------------------------------------
+
+export const fetchPartnerDashboard = (partnerEmail) =>
+  apiGet(`/reports/dashboard/partner?partner_email=${encodeURIComponent(partnerEmail)}`);
+export const fetchClientDashboard = (clientId) => apiGet(`/reports/dashboard/client/${clientId}`);
