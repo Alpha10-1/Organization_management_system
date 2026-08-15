@@ -15,6 +15,15 @@ import {
   fetchClientDashboard,
 } from "@/lib/api";
 
+function clientDisplayName(client) {
+  if (!client) return "";
+  if ((client.client_type === "business" || client.client_type === "npo") && client.company_name) {
+    return client.company_name;
+  }
+  const name = [client.first_name, client.last_name].filter(Boolean).join(" ");
+  return name || client.company_name || `Client #${client.id}`;
+}
+
 function formatMoney(value) {
   if (value === null || value === undefined) return "—";
   return `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -173,7 +182,7 @@ function ClientDashboardPanel() {
         <option value="">Choose a client...</option>
         {clients.map((c) => (
           <option key={c.id} value={c.id}>
-            {c.first_name} {c.last_name}
+            {clientDisplayName(c)}
           </option>
         ))}
       </select>

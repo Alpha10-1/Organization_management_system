@@ -119,7 +119,7 @@ def assign_tag_to_client(
         entity_type="client",
         entity_id=client_id,
         title=f"Tag added: {tag.name}",
-        description=f"Tagged {client.first_name} {client.last_name} with '{tag.name}'.",
+        description=f"Tagged {client.display_name} with '{tag.name}'.",
     )
 
     return {"message": "Tag assigned"}

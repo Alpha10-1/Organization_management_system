@@ -19,6 +19,12 @@ class ProjectBase(BaseModel):
     risk_level: str = "low"
     compliance_flag: Optional[str] = None
 
+    # Optional extended detail ("Specify More" section on the form).
+    objectives: Optional[str] = None
+    deliverables: Optional[str] = None
+    stakeholders: Optional[str] = None
+    billing_notes: Optional[str] = None
+
 
 class ProjectCreate(ProjectBase):
     pass
@@ -37,6 +43,10 @@ class ProjectUpdate(BaseModel):
     description: Optional[str] = None
     risk_level: Optional[str] = None
     compliance_flag: Optional[str] = None
+    objectives: Optional[str] = None
+    deliverables: Optional[str] = None
+    stakeholders: Optional[str] = None
+    billing_notes: Optional[str] = None
 
 
 class ProjectOut(BaseModel):
@@ -55,6 +65,10 @@ class ProjectOut(BaseModel):
     description: Optional[str] = None
     risk_level: str
     compliance_flag: Optional[str] = None
+    objectives: Optional[str] = None
+    deliverables: Optional[str] = None
+    stakeholders: Optional[str] = None
+    billing_notes: Optional[str] = None
     created_by_email: str
     created_by_name: str
     created_at: datetime

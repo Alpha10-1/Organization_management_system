@@ -1,5 +1,6 @@
 def _create_client(admin_client, **overrides):
     payload = {
+        "client_type": "individual",
         "first_name": "Jane",
         "last_name": "Doe",
         "email": "jane.doe@example.com",

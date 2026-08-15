@@ -8,6 +8,7 @@ import {
   deleteProject,
   fetchClients,
   fetchUsers,
+  fetchDepartments,
   fetchCurrentUser,
   fetchMilestones,
   createMilestone,
@@ -24,6 +25,9 @@ import {
   fetchProjectUtilization,
   fetchTaskTemplates,
   applyTaskTemplate,
+  fetchProjectAssignments,
+  createProjectAssignment,
+  deleteProjectAssignment,
 } from "@/lib/api";
 
 const PROJECT_TYPES = ["audit", "tax", "advisory", "systems_implementation", "other"];
@@ -58,7 +62,13 @@ const initialProjectForm = {
   description: "",
   risk_level: "low",
   compliance_flag: "",
+  objectives: "",
+  deliverables: "",
+  stakeholders: "",
+  billing_notes: "",
 };
+
+const initialAssignmentForm = { target_type: "user", target_id: "", role: "" };
 
 const initialMilestoneForm = { name: "", description: "", due_date: "", status: "pending" };
 
@@ -85,14 +95,25 @@ function formatDate(value) {
   return new Date(value).toLocaleDateString();
 }
 
+function clientDisplayName(client) {
+  if (!client) return "";
+  if ((client.client_type === "business" || client.client_type === "npo") && client.company_name) {
+    return client.company_name;
+  }
+  const name = [client.first_name, client.last_name].filter(Boolean).join(" ");
+  return name || client.company_name || `Client #${client.id}`;
+}
+
 export default function ProjectsPage() {
   const [projects, setProjects] = useState([]);
   const [clients, setClients] = useState([]);
   const [users, setUsers] = useState([]);
+  const [departments, setDepartments] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [showMoreProjectDetail, setShowMoreProjectDetail] = useState(false);
 
   const [clientFilter, setClientFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -124,6 +145,10 @@ export default function ProjectsPage() {
   const [templateToApply, setTemplateToApply] = useState("");
   const [applyingTemplate, setApplyingTemplate] = useState(false);
 
+  const [assignments, setAssignments] = useState([]);
+  const [assignmentForm, setAssignmentForm] = useState(initialAssignmentForm);
+  const [assigningTeam, setAssigningTeam] = useState(false);
+
   async function loadProjects() {
     try {
       setLoading(true);
@@ -146,6 +171,7 @@ export default function ProjectsPage() {
     loadProjects();
     fetchClients().then(setClients).catch(() => setClients([]));
     fetchUsers().then(setUsers).catch(() => setUsers([]));
+    fetchDepartments().then(setDepartments).catch(() => setDepartments([]));
     fetchCurrentUser().then(setCurrentUser).catch(() => setCurrentUser(null));
     fetchTaskTemplates().then(setTemplates).catch(() => setTemplates([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -160,16 +186,18 @@ export default function ProjectsPage() {
     setSelectedProject(project);
     setActiveTab("overview");
     try {
-      const [ms, cs, te, util] = await Promise.all([
+      const [ms, cs, te, util, as] = await Promise.all([
         fetchMilestones({ project_id: project.id }),
         fetchContracts({ project_id: project.id }),
         fetchTimeEntries({ project_id: project.id }),
         fetchProjectUtilization(project.id).catch(() => null),
+        fetchProjectAssignments(project.id).catch(() => []),
       ]);
       setMilestones(ms);
       setContracts(cs);
       setTimeEntries(te);
       setUtilization(util);
+      setAssignments(as);
 
       const margins = {};
       await Promise.all(
@@ -193,7 +221,7 @@ export default function ProjectsPage() {
 
   function clientLabel(clientId) {
     const match = clients.find((c) => c.id === clientId);
-    return match ? `${match.first_name} ${match.last_name}` : `#${clientId}`;
+    return match ? clientDisplayName(match) : `#${clientId}`;
   }
 
   // --- Project CRUD ---------------------------------------------------------
@@ -201,6 +229,7 @@ export default function ProjectsPage() {
   function openCreateProject() {
     setEditingProject(null);
     setProjectForm(initialProjectForm);
+    setShowMoreProjectDetail(false);
     setShowProjectModal(true);
   }
 
@@ -219,7 +248,14 @@ export default function ProjectsPage() {
       description: project.description || "",
       risk_level: project.risk_level,
       compliance_flag: project.compliance_flag || "",
+      objectives: project.objectives || "",
+      deliverables: project.deliverables || "",
+      stakeholders: project.stakeholders || "",
+      billing_notes: project.billing_notes || "",
     });
+    setShowMoreProjectDetail(
+      Boolean(project.objectives || project.deliverables || project.stakeholders || project.billing_notes)
+    );
     setShowProjectModal(true);
   }
 
@@ -246,6 +282,10 @@ export default function ProjectsPage() {
         description: projectForm.description || undefined,
         risk_level: projectForm.risk_level,
         compliance_flag: projectForm.compliance_flag || undefined,
+        objectives: projectForm.objectives || undefined,
+        deliverables: projectForm.deliverables || undefined,
+        stakeholders: projectForm.stakeholders || undefined,
+        billing_notes: projectForm.billing_notes || undefined,
       };
       if (editingProject) {
         await updateProject(editingProject.id, payload);
@@ -269,6 +309,48 @@ export default function ProjectsPage() {
       await loadProjects();
     } catch (err) {
       setError(err.message || "Failed to delete project");
+    }
+  }
+
+  // --- Team assignment (individuals or whole departments) --------------------
+
+  function handleAssignmentFormChange(e) {
+    const { name, value } = e.target;
+    setAssignmentForm((prev) => ({
+      ...prev,
+      [name]: value,
+      ...(name === "target_type" ? { target_id: "" } : {}),
+    }));
+  }
+
+  async function handleAddAssignment(e) {
+    e.preventDefault();
+    if (!selectedProject || !assignmentForm.target_id) return;
+    try {
+      setAssigningTeam(true);
+      setError("");
+      const payload =
+        assignmentForm.target_type === "department"
+          ? { department_id: Number(assignmentForm.target_id), role: assignmentForm.role || undefined }
+          : { user_id: Number(assignmentForm.target_id), role: assignmentForm.role || undefined };
+      await createProjectAssignment(selectedProject.id, payload);
+      setAssignmentForm(initialAssignmentForm);
+      await refreshDetail();
+    } catch (err) {
+      setError(err.message || "Failed to assign team member");
+    } finally {
+      setAssigningTeam(false);
+    }
+  }
+
+  async function handleRemoveAssignment(assignment) {
+    if (!selectedProject) return;
+    try {
+      setError("");
+      await deleteProjectAssignment(selectedProject.id, assignment.id);
+      await refreshDetail();
+    } catch (err) {
+      setError(err.message || "Failed to remove assignment");
     }
   }
 
@@ -424,12 +506,13 @@ export default function ProjectsPage() {
   const tabs = useMemo(
     () => [
       { id: "overview", label: "Overview" },
+      { id: "team", label: `Team (${assignments.length})` },
       { id: "milestones", label: `Milestones (${milestones.length})` },
       { id: "contracts", label: `Contracts (${contracts.length})` },
       { id: "time", label: `Time (${timeEntries.length})` },
       { id: "template", label: "Apply Template" },
     ],
-    [milestones.length, contracts.length, timeEntries.length]
+    [assignments.length, milestones.length, contracts.length, timeEntries.length]
   );
 
   return (
@@ -465,7 +548,7 @@ export default function ProjectsPage() {
           <option value="">All clients</option>
           {clients.map((c) => (
             <option key={c.id} value={c.id}>
-              {c.first_name} {c.last_name}
+              {clientDisplayName(c)}
             </option>
           ))}
         </select>
@@ -674,6 +757,117 @@ export default function ProjectsPage() {
                       </p>
                     </div>
                   ) : null}
+                  {selectedProject.objectives || selectedProject.deliverables || selectedProject.stakeholders || selectedProject.billing_notes ? (
+                    <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        Additional Detail
+                      </p>
+                      {selectedProject.objectives ? (
+                        <p className="text-sm text-slate-800">
+                          <span className="font-semibold">Objectives: </span>
+                          {selectedProject.objectives}
+                        </p>
+                      ) : null}
+                      {selectedProject.deliverables ? (
+                        <p className="text-sm text-slate-800">
+                          <span className="font-semibold">Deliverables: </span>
+                          {selectedProject.deliverables}
+                        </p>
+                      ) : null}
+                      {selectedProject.stakeholders ? (
+                        <p className="text-sm text-slate-800">
+                          <span className="font-semibold">Stakeholders: </span>
+                          {selectedProject.stakeholders}
+                        </p>
+                      ) : null}
+                      {selectedProject.billing_notes ? (
+                        <p className="text-sm text-slate-800">
+                          <span className="font-semibold">Billing Notes: </span>
+                          {selectedProject.billing_notes}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {activeTab === "team" ? (
+                <div className="mt-4 space-y-3">
+                  <div className="max-h-56 space-y-2 overflow-y-auto">
+                    {assignments.length === 0 ? (
+                      <p className="text-sm text-slate-400">No one assigned yet.</p>
+                    ) : (
+                      assignments.map((a) => (
+                        <div
+                          key={a.id}
+                          className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3"
+                        >
+                          <div>
+                            <p className="text-sm font-medium text-slate-800">
+                              {a.user_id ? a.user_name || `User #${a.user_id}` : a.department_name || `Department #${a.department_id}`}
+                              <span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-600">
+                                {a.user_id ? "Individual" : "Department"}
+                              </span>
+                            </p>
+                            {a.role ? <p className="text-xs text-slate-500">{a.role}</p> : null}
+                          </div>
+                          <button
+                            onClick={() => handleRemoveAssignment(a)}
+                            className="shrink-0 text-xs font-semibold text-rose-500 hover:underline"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  <form
+                    onSubmit={handleAddAssignment}
+                    className="space-y-2 rounded-xl border border-slate-200 bg-white p-3"
+                  >
+                    <div className="flex gap-2">
+                      <select
+                        name="target_type"
+                        value={assignmentForm.target_type}
+                        onChange={handleAssignmentFormChange}
+                        className="rounded-lg border border-slate-300 px-2 py-2 text-xs outline-none focus:border-slate-900"
+                      >
+                        <option value="user">Individual</option>
+                        <option value="department">Department</option>
+                      </select>
+                      <select
+                        name="target_id"
+                        value={assignmentForm.target_id}
+                        onChange={handleAssignmentFormChange}
+                        className="flex-1 rounded-lg border border-slate-300 px-2 py-2 text-xs outline-none focus:border-slate-900"
+                        required
+                      >
+                        <option value="">
+                          {assignmentForm.target_type === "department" ? "Select a department..." : "Select a person..."}
+                        </option>
+                        {(assignmentForm.target_type === "department" ? departments : users).map((opt) => (
+                          <option key={opt.id} value={opt.id}>
+                            {opt.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <input
+                      name="role"
+                      value={assignmentForm.role}
+                      onChange={handleAssignmentFormChange}
+                      placeholder="Role on engagement (optional)"
+                      className="w-full rounded-lg border border-slate-300 px-2 py-2 text-xs outline-none focus:border-slate-900"
+                    />
+                    <button
+                      type="submit"
+                      disabled={assigningTeam || !assignmentForm.target_id}
+                      className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                    >
+                      {assigningTeam ? "Assigning..." : "+ Assign"}
+                    </button>
+                  </form>
                 </div>
               ) : null}
 
@@ -895,7 +1089,7 @@ export default function ProjectsPage() {
                     <option value="">Select a client</option>
                     {clients.map((c) => (
                       <option key={c.id} value={c.id}>
-                        {c.first_name} {c.last_name}
+                        {clientDisplayName(c)}
                       </option>
                     ))}
                   </select>
@@ -1041,6 +1235,69 @@ export default function ProjectsPage() {
                   className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
                 />
               </div>
+
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowMoreProjectDetail((prev) => !prev)}
+                  className="text-sm font-semibold text-blue-600 hover:underline"
+                >
+                  {showMoreProjectDetail ? "Hide additional detail" : "Specify More"}
+                </button>
+                <p className="mt-1 text-xs text-slate-500">
+                  Optional extra detail — objectives, deliverables, stakeholders and billing notes — for
+                  engagements that need it.
+                </p>
+              </div>
+
+              {showMoreProjectDetail ? (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">Objectives</label>
+                    <textarea
+                      name="objectives"
+                      value={projectForm.objectives}
+                      onChange={handleProjectFormChange}
+                      rows={3}
+                      placeholder="What this engagement is meant to achieve"
+                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">Deliverables</label>
+                    <textarea
+                      name="deliverables"
+                      value={projectForm.deliverables}
+                      onChange={handleProjectFormChange}
+                      rows={3}
+                      placeholder="What will be handed over at completion"
+                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">Stakeholders</label>
+                    <textarea
+                      name="stakeholders"
+                      value={projectForm.stakeholders}
+                      onChange={handleProjectFormChange}
+                      rows={3}
+                      placeholder="Key people on the client side"
+                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">Billing Notes</label>
+                    <textarea
+                      name="billing_notes"
+                      value={projectForm.billing_notes}
+                      onChange={handleProjectFormChange}
+                      rows={3}
+                      placeholder="Fee structure, milestones, special terms"
+                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                    />
+                  </div>
+                </div>
+              ) : null}
 
               <div className="flex justify-end gap-3 pt-2">
                 <button

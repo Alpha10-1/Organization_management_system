@@ -4,8 +4,23 @@ from datetime import datetime
 
 
 class ClientBase(BaseModel):
-    first_name: str
-    last_name: str
+    # business | individual | npo -- see app.models.client for rationale.
+    client_type: str = "business"
+
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+
+    company_name: Optional[str] = None
+    registration_number: Optional[str] = None
+    tax_number: Optional[str] = None
+    industry: Optional[str] = None
+    website: Optional[str] = None
+
+    billing_address: Optional[str] = None
+    city: Optional[str] = None
+    country: Optional[str] = None
+    postal_code: Optional[str] = None
+
     phone: Optional[str] = None
     email: Optional[EmailStr] = None
     status: str = "Active"
@@ -19,8 +34,18 @@ class ClientCreate(ClientBase):
 
 
 class ClientUpdate(BaseModel):
+    client_type: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
+    company_name: Optional[str] = None
+    registration_number: Optional[str] = None
+    tax_number: Optional[str] = None
+    industry: Optional[str] = None
+    website: Optional[str] = None
+    billing_address: Optional[str] = None
+    city: Optional[str] = None
+    country: Optional[str] = None
+    postal_code: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[EmailStr] = None
     status: Optional[str] = None

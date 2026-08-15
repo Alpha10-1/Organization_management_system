@@ -30,9 +30,28 @@ const HEALTH_STYLES = {
 
 const initialContactForm = { name: "", role: "", email: "", phone: "", is_primary: false };
 
+function clientName(client) {
+  if (!client) return "";
+  if ((client.client_type === "business" || client.client_type === "npo") && client.company_name) {
+    return client.company_name;
+  }
+  const name = [client.first_name, client.last_name].filter(Boolean).join(" ");
+  return name || client.company_name || `Client #${client.id}`;
+}
+
 const initialForm = {
+  client_type: "business",
   first_name: "",
   last_name: "",
+  company_name: "",
+  registration_number: "",
+  tax_number: "",
+  industry: "",
+  website: "",
+  billing_address: "",
+  city: "",
+  country: "",
+  postal_code: "",
   phone: "",
   email: "",
   status: "Active",
@@ -52,6 +71,7 @@ export default function ClientsPage() {
   const [editingClient, setEditingClient] = useState(null);
   const [error, setError] = useState("");
   const [form, setForm] = useState(initialForm);
+  const [showMoreClientDetail, setShowMoreClientDetail] = useState(false);
 
   const [departments, setDepartments] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
@@ -267,14 +287,25 @@ export default function ClientsPage() {
   function openCreateModal() {
     setEditingClient(null);
     setForm(initialForm);
+    setShowMoreClientDetail(false);
     setShowModal(true);
   }
 
   function openEditModal(client) {
     setEditingClient(client);
     setForm({
+      client_type: client.client_type || "business",
       first_name: client.first_name || "",
       last_name: client.last_name || "",
+      company_name: client.company_name || "",
+      registration_number: client.registration_number || "",
+      tax_number: client.tax_number || "",
+      industry: client.industry || "",
+      website: client.website || "",
+      billing_address: client.billing_address || "",
+      city: client.city || "",
+      country: client.country || "",
+      postal_code: client.postal_code || "",
       phone: client.phone || "",
       email: client.email || "",
       status: client.status || "Active",
@@ -282,6 +313,18 @@ export default function ClientsPage() {
       department_id: client.department_id ?? "",
       parent_client_id: client.parent_client_id ?? "",
     });
+    setShowMoreClientDetail(
+      Boolean(
+        client.registration_number ||
+          client.tax_number ||
+          client.industry ||
+          client.website ||
+          client.billing_address ||
+          client.city ||
+          client.country ||
+          client.postal_code
+      )
+    );
     setShowModal(true);
   }
 
@@ -289,6 +332,7 @@ export default function ClientsPage() {
     setShowModal(false);
     setEditingClient(null);
     setForm(initialForm);
+    setShowMoreClientDetail(false);
   }
 
   async function handleSaveClient(e) {
@@ -298,8 +342,13 @@ export default function ClientsPage() {
       setSubmitting(true);
       setError("");
 
+      const isIndividual = form.client_type === "individual";
+
       const payload = {
         ...form,
+        first_name: isIndividual ? form.first_name : form.first_name || null,
+        last_name: isIndividual ? form.last_name : form.last_name || null,
+        company_name: isIndividual ? form.company_name || null : form.company_name,
         department_id: form.department_id ? Number(form.department_id) : null,
         parent_client_id: form.parent_client_id ? Number(form.parent_client_id) : null,
       };
@@ -478,7 +527,10 @@ export default function ClientsPage() {
                         />
                       </td>
                       <td className="px-4 py-4 font-medium text-slate-900">
-                        {client.first_name} {client.last_name}
+                        {clientName(client)}
+                        <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-500">
+                          {client.client_type || "business"}
+                        </span>
                       </td>
                       <td className="px-4 py-4">
                         <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-semibold text-slate-700">
@@ -538,9 +590,40 @@ export default function ClientsPage() {
                   Full Name
                 </p>
                 <p className="mt-1 text-sm text-slate-800">
-                  {selectedClient.first_name} {selectedClient.last_name}
+                  {clientName(selectedClient)}
                 </p>
               </div>
+
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Type
+                </p>
+                <p className="mt-1 text-sm capitalize text-slate-800">
+                  {selectedClient.client_type || "business"}
+                </p>
+              </div>
+
+              {selectedClient.client_type !== "individual" ? (
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Organization Detail
+                  </p>
+                  <p className="mt-1 text-sm text-slate-800">
+                    {selectedClient.industry || "—"}
+                    {selectedClient.registration_number ? ` · Reg. ${selectedClient.registration_number}` : ""}
+                  </p>
+                  {selectedClient.website ? (
+                    <p className="mt-1 text-sm text-slate-600">{selectedClient.website}</p>
+                  ) : null}
+                  {selectedClient.billing_address || selectedClient.city || selectedClient.country ? (
+                    <p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">
+                      {[selectedClient.billing_address, selectedClient.city, selectedClient.country]
+                        .filter(Boolean)
+                        .join(", ")}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
 
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -831,31 +914,94 @@ export default function ClientsPage() {
             </div>
 
             <form onSubmit={handleSaveClient} className="grid gap-4 md:grid-cols-2">
-              <div>
+              <div className="md:col-span-2">
                 <label className="mb-2 block text-sm font-medium text-slate-700">
-                  First Name
+                  Client Type
                 </label>
-                <input
-                  name="first_name"
-                  value={form.first_name}
+                <select
+                  name="client_type"
+                  value={form.client_type}
                   onChange={handleInputChange}
-                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
-                  required
-                />
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900 md:w-1/2"
+                >
+                  <option value="business">Business</option>
+                  <option value="npo">Non-profit organization (NPO)</option>
+                  <option value="individual">Individual</option>
+                </select>
+                <p className="mt-1 text-xs text-slate-500">
+                  Most engagement clients are organizations. Choose "Individual" only for clients dealing
+                  with the firm as a private person.
+                </p>
               </div>
 
-              <div>
-                <label className="mb-2 block text-sm font-medium text-slate-700">
-                  Last Name
-                </label>
-                <input
-                  name="last_name"
-                  value={form.last_name}
-                  onChange={handleInputChange}
-                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
-                  required
-                />
-              </div>
+              {form.client_type === "individual" ? (
+                <>
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">
+                      First Name
+                    </label>
+                    <input
+                      name="first_name"
+                      value={form.first_name}
+                      onChange={handleInputChange}
+                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">
+                      Last Name
+                    </label>
+                    <input
+                      name="last_name"
+                      value={form.last_name}
+                      onChange={handleInputChange}
+                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                      required
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="md:col-span-2">
+                    <label className="mb-2 block text-sm font-medium text-slate-700">
+                      {form.client_type === "npo" ? "Organization Name" : "Company Name"}
+                    </label>
+                    <input
+                      name="company_name"
+                      value={form.company_name}
+                      onChange={handleInputChange}
+                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">
+                      Primary Contact First Name
+                    </label>
+                    <input
+                      name="first_name"
+                      value={form.first_name}
+                      onChange={handleInputChange}
+                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">
+                      Primary Contact Last Name
+                    </label>
+                    <input
+                      name="last_name"
+                      value={form.last_name}
+                      onChange={handleInputChange}
+                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                    />
+                  </div>
+                </>
+              )}
 
               <div>
                 <label className="mb-2 block text-sm font-medium text-slate-700">
@@ -917,7 +1063,7 @@ export default function ClientsPage() {
                 </select>
               </div>
 
-              <div>
+              <div className="md:col-span-2">
                 <label className="mb-2 block text-sm font-medium text-slate-700">
                   Parent Client (group structure)
                 </label>
@@ -932,11 +1078,124 @@ export default function ClientsPage() {
                     .filter((c) => !editingClient || c.id !== editingClient.id)
                     .map((c) => (
                       <option key={c.id} value={c.id}>
-                        {c.first_name} {c.last_name}
+                        {clientName(c)}
                       </option>
                     ))}
                 </select>
               </div>
+
+              {form.client_type !== "individual" ? (
+                <div className="md:col-span-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowMoreClientDetail((prev) => !prev)}
+                    className="text-sm font-semibold text-blue-600 hover:underline"
+                  >
+                    {showMoreClientDetail ? "Hide additional detail" : "Specify More"}
+                  </button>
+                </div>
+              ) : null}
+
+              {form.client_type !== "individual" && showMoreClientDetail ? (
+                <>
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">
+                      Registration Number
+                    </label>
+                    <input
+                      name="registration_number"
+                      value={form.registration_number}
+                      onChange={handleInputChange}
+                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">
+                      Tax Number
+                    </label>
+                    <input
+                      name="tax_number"
+                      value={form.tax_number}
+                      onChange={handleInputChange}
+                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">
+                      Industry
+                    </label>
+                    <input
+                      name="industry"
+                      value={form.industry}
+                      onChange={handleInputChange}
+                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">
+                      Website
+                    </label>
+                    <input
+                      name="website"
+                      value={form.website}
+                      onChange={handleInputChange}
+                      placeholder="https://"
+                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                    />
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <label className="mb-2 block text-sm font-medium text-slate-700">
+                      Billing Address
+                    </label>
+                    <input
+                      name="billing_address"
+                      value={form.billing_address}
+                      onChange={handleInputChange}
+                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">
+                      City
+                    </label>
+                    <input
+                      name="city"
+                      value={form.city}
+                      onChange={handleInputChange}
+                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">
+                      Country
+                    </label>
+                    <input
+                      name="country"
+                      value={form.country}
+                      onChange={handleInputChange}
+                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">
+                      Postal Code
+                    </label>
+                    <input
+                      name="postal_code"
+                      value={form.postal_code}
+                      onChange={handleInputChange}
+                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                    />
+                  </div>
+                </>
+              ) : null}
 
               <div className="md:col-span-2">
                 <label className="mb-2 block text-sm font-medium text-slate-700">

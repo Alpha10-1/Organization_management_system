@@ -14,6 +14,15 @@ import {
   fetchFileVersions,
 } from "@/lib/api";
 
+function clientDisplayName(client) {
+  if (!client) return "";
+  if ((client.client_type === "business" || client.client_type === "npo") && client.company_name) {
+    return client.company_name;
+  }
+  const name = [client.first_name, client.last_name].filter(Boolean).join(" ");
+  return name || client.company_name || `Client #${client.id}`;
+}
+
 function formatFileSize(bytes) {
   if (!bytes && bytes !== 0) return "-";
   if (bytes < 1024) return `${bytes} B`;
@@ -340,7 +349,7 @@ export default function FilesPage() {
             <option value="">All Clients</option>
             {clients.map((client) => (
               <option key={client.id} value={client.id}>
-                {client.first_name} {client.last_name}
+                {clientDisplayName(client)}
               </option>
             ))}
           </select>
@@ -695,7 +704,7 @@ export default function FilesPage() {
                   <option value="">No linked client</option>
                   {clients.map((client) => (
                     <option key={client.id} value={client.id}>
-                      {client.first_name} {client.last_name} (ID: {client.id})
+                      {clientDisplayName(client)} (ID: {client.id})
                     </option>
                   ))}
                 </select>

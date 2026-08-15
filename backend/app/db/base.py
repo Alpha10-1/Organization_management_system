@@ -5,6 +5,7 @@ from app.models.file_record import FileRecord
 from app.models.user import User
 from app.models.department import Department
 from app.models.project import Project
+from app.models.project_assignment import ProjectAssignment
 from app.models.tag import Tag, ClientTag
 from app.models.client_note import ClientNote
 from app.models.client_contact import ClientContact

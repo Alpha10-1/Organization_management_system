@@ -36,6 +36,14 @@ class Project(Base):
 
     description = Column(Text, nullable=True)
 
+    # Optional extended detail, surfaced behind a "Specify More" toggle on
+    # the create/edit form rather than cluttering the default view. None of
+    # these are required to create a project.
+    objectives = Column(Text, nullable=True)
+    deliverables = Column(Text, nullable=True)
+    stakeholders = Column(Text, nullable=True)
+    billing_notes = Column(Text, nullable=True)
+
     # Risk & compliance tracking (feature 6) lives at the engagement level
     # since risk is usually assessed per-engagement, not per-client.
     risk_level = Column(String(20), nullable=False, default="low", index=True)  # low | medium | high

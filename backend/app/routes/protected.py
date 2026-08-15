@@ -72,7 +72,7 @@ async def dashboard_summary(
         "recent_clients": [
             {
                 "id": client.id,
-                "name": f"{client.first_name} {client.last_name}",
+                "name": client.display_name,
                 "status": client.status,
                 "email": client.email,
                 "phone": client.phone,

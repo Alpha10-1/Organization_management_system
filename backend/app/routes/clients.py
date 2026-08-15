@@ -24,9 +24,21 @@ from app.schemas.user import UserPublic
 router = APIRouter(prefix="/clients", tags=["Clients"])
 
 VALID_STATUSES = {"Active", "Pending", "Closed"}
+VALID_CLIENT_TYPES = {"business", "individual", "npo"}
 
 DEFAULT_PAGE_LIMIT = 100
 MAX_PAGE_LIMIT = 200
+
+
+def _validate_client_payload(client_type: str, first_name, last_name, company_name) -> None:
+    if client_type not in VALID_CLIENT_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid client_type. Must be one of: {sorted(VALID_CLIENT_TYPES)}")
+    if client_type == "individual":
+        if not first_name or not last_name:
+            raise HTTPException(status_code=400, detail="Individual clients require first_name and last_name")
+    else:
+        if not company_name:
+            raise HTTPException(status_code=400, detail=f"{client_type.capitalize()} clients require company_name")
 
 
 @router.get("/", response_model=list[ClientOut])
@@ -49,6 +61,7 @@ def list_clients(
             or_(
                 Client.first_name.ilike(search_term),
                 Client.last_name.ilike(search_term),
+                Client.company_name.ilike(search_term),
                 Client.phone.ilike(search_term),
                 Client.email.ilike(search_term),
             )
@@ -90,6 +103,8 @@ def create_client(
         if not parent:
             raise HTTPException(status_code=404, detail="Parent client not found")
 
+    _validate_client_payload(client.client_type, client.first_name, client.last_name, client.company_name)
+
     new_client = Client(**client.model_dump())
     db.add(new_client)
     db.commit()
@@ -101,8 +116,8 @@ def create_client(
         action="client_created",
         entity_type="client",
         entity_id=new_client.id,
-        title=f"Client created: {new_client.first_name} {new_client.last_name}",
-        description=f"Created client record with status '{new_client.status}'.",
+        title=f"Client created: {new_client.display_name}",
+        description=f"Created {new_client.client_type} client record with status '{new_client.status}'.",
     )
 
     return new_client
@@ -161,6 +176,12 @@ def update_client(
         if updates["relationship_health"] not in VALID_HEALTH_VALUES:
             raise HTTPException(status_code=400, detail=f"Invalid relationship_health. Must be one of: {sorted(VALID_HEALTH_VALUES)}")
 
+    merged_type = updates.get("client_type", client.client_type)
+    merged_first = updates.get("first_name", client.first_name)
+    merged_last = updates.get("last_name", client.last_name)
+    merged_company = updates.get("company_name", client.company_name)
+    _validate_client_payload(merged_type, merged_first, merged_last, merged_company)
+
     for key, value in updates.items():
         setattr(client, key, value)
 
@@ -173,7 +194,7 @@ def update_client(
         action="client_updated",
         entity_type="client",
         entity_id=client.id,
-        title=f"Client updated: {client.first_name} {client.last_name}",
+        title=f"Client updated: {client.display_name}",
         description="Client record updated.",
     )
 
@@ -195,7 +216,7 @@ def delete_client(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    client_name = f"{client.first_name} {client.last_name}"
+    client_name = client.display_name
 
     # Soft delete: keep the row (and any files/activity referencing it)
     # for audit/recovery, just hide it from normal queries.
@@ -295,7 +316,7 @@ def add_client_note(
         action="client_note_added",
         entity_type="client",
         entity_id=client_id,
-        title=f"Note added: {client.first_name} {client.last_name}",
+        title=f"Note added: {client.display_name}",
         description=payload.body[:200],
     )
 
@@ -405,7 +426,7 @@ def add_client_contact(
         entity_type="client",
         entity_id=client_id,
         title=f"Contact added: {contact.name}",
-        description=f"Added contact '{contact.name}' ({contact.role or 'no role'}) to {client.first_name} {client.last_name}.",
+        description=f"Added contact '{contact.name}' ({contact.role or 'no role'}) to {client.display_name}.",
     )
 
     return contact

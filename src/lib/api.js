@@ -604,6 +604,14 @@ export const createProject = (payload) => apiSend("/projects/", "POST", payload)
 export const updateProject = (id, payload) => apiSend(`/projects/${id}`, "PUT", payload);
 export const deleteProject = (id) => apiDelete(`/projects/${id}`);
 
+// --- Project team assignment (individuals or whole departments) -------------------
+
+export const fetchProjectAssignments = (projectId) => apiGet(`/projects/${projectId}/assignments`);
+export const createProjectAssignment = (projectId, payload) =>
+  apiSend(`/projects/${projectId}/assignments`, "POST", payload);
+export const deleteProjectAssignment = (projectId, assignmentId) =>
+  apiDelete(`/projects/${projectId}/assignments/${assignmentId}`);
+
 // --- Client contacts & hierarchy --------------------------------------------------
 
 export const fetchClientContacts = (clientId) => apiGet(`/clients/${clientId}/contacts`);

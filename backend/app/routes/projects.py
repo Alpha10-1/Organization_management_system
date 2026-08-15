@@ -7,9 +7,13 @@ from app.core.deps import get_current_active_user, get_user_by_email
 from app.core.time import utcnow
 from app.db.session import get_db
 from app.models.client import Client
+from app.models.department import Department
 from app.models.project import Project
+from app.models.project_assignment import ProjectAssignment
 from app.models.task import Task
+from app.models.user import User
 from app.schemas.project import ProjectCreate, ProjectOut, ProjectSummary, ProjectUpdate
+from app.schemas.project_assignment import ProjectAssignmentCreate, ProjectAssignmentOut
 from app.schemas.user import UserPublic
 
 router = APIRouter(prefix="/projects", tags=["Projects"])
@@ -147,6 +151,10 @@ def create_project(
         description=payload.description,
         risk_level=payload.risk_level,
         compliance_flag=payload.compliance_flag,
+        objectives=payload.objectives,
+        deliverables=payload.deliverables,
+        stakeholders=payload.stakeholders,
+        billing_notes=payload.billing_notes,
         created_by_email=current_user.email,
         created_by_name=current_user.name,
         **extra,
@@ -283,3 +291,129 @@ def delete_project(
     )
 
     return {"message": "Project deleted successfully"}
+
+
+# --- Team assignment (individuals or whole departments) -------------------
+
+
+def _assignment_out(db: Session, assignment: ProjectAssignment) -> ProjectAssignmentOut:
+    user_name = None
+    department_name = None
+    if assignment.user_id:
+        user = db.query(User).filter(User.id == assignment.user_id).first()
+        user_name = user.name if user else None
+    if assignment.department_id:
+        dept = db.query(Department).filter(Department.id == assignment.department_id).first()
+        department_name = dept.name if dept else None
+
+    return ProjectAssignmentOut(
+        id=assignment.id,
+        project_id=assignment.project_id,
+        user_id=assignment.user_id,
+        department_id=assignment.department_id,
+        user_name=user_name,
+        department_name=department_name,
+        role=assignment.role,
+        assigned_by_email=assignment.assigned_by_email,
+        assigned_by_name=assignment.assigned_by_name,
+        created_at=assignment.created_at,
+    )
+
+
+@router.get("/{project_id}/assignments", response_model=list[ProjectAssignmentOut])
+def list_project_assignments(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    project = db.query(Project).filter(Project.id == project_id, Project.deleted_at.is_(None)).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    assignments = (
+        db.query(ProjectAssignment)
+        .filter(ProjectAssignment.project_id == project_id)
+        .order_by(ProjectAssignment.created_at.asc())
+        .all()
+    )
+    return [_assignment_out(db, a) for a in assignments]
+
+
+@router.post("/{project_id}/assignments", response_model=ProjectAssignmentOut)
+def add_project_assignment(
+    project_id: int,
+    payload: ProjectAssignmentCreate,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    project = db.query(Project).filter(Project.id == project_id, Project.deleted_at.is_(None)).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if payload.user_id:
+        user = db.query(User).filter(User.id == payload.user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        existing = (
+            db.query(ProjectAssignment)
+            .filter(ProjectAssignment.project_id == project_id, ProjectAssignment.user_id == payload.user_id)
+            .first()
+        )
+        if existing:
+            raise HTTPException(status_code=400, detail="This user is already assigned to the engagement")
+    else:
+        dept = db.query(Department).filter(Department.id == payload.department_id).first()
+        if not dept:
+            raise HTTPException(status_code=404, detail="Department not found")
+        existing = (
+            db.query(ProjectAssignment)
+            .filter(ProjectAssignment.project_id == project_id, ProjectAssignment.department_id == payload.department_id)
+            .first()
+        )
+        if existing:
+            raise HTTPException(status_code=400, detail="This department is already assigned to the engagement")
+
+    assignment = ProjectAssignment(
+        project_id=project_id,
+        user_id=payload.user_id,
+        department_id=payload.department_id,
+        role=payload.role,
+        assigned_by_email=current_user.email,
+        assigned_by_name=current_user.name,
+    )
+    db.add(assignment)
+    db.commit()
+    db.refresh(assignment)
+
+    target = f"user #{payload.user_id}" if payload.user_id else f"department #{payload.department_id}"
+    log_activity(
+        db=db,
+        user=current_user,
+        action="project_assignment_added",
+        entity_type="project",
+        entity_id=project_id,
+        title=f"Team assigned: {project.name}",
+        description=f"Assigned {target} to engagement '{project.name}'" + (f" as {payload.role}." if payload.role else "."),
+    )
+
+    return _assignment_out(db, assignment)
+
+
+@router.delete("/{project_id}/assignments/{assignment_id}")
+def remove_project_assignment(
+    project_id: int,
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    assignment = (
+        db.query(ProjectAssignment)
+        .filter(ProjectAssignment.id == assignment_id, ProjectAssignment.project_id == project_id)
+        .first()
+    )
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    db.delete(assignment)
+    db.commit()
+    return {"message": "Assignment removed successfully"}

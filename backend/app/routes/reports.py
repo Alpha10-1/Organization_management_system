@@ -77,8 +77,9 @@ def export_clients_csv(
     rows = [
         {
             "ID": c.id,
-            "First Name": c.first_name,
-            "Last Name": c.last_name,
+            "Type": c.client_type,
+            "Name": c.display_name,
+            "Company Name": c.company_name or "",
             "Email": c.email or "",
             "Phone": c.phone or "",
             "Status": c.status,
@@ -95,9 +96,9 @@ def export_clients_pdf(
     current_user: UserPublic = Depends(get_current_active_user),
 ):
     clients = db.query(Client).filter(Client.deleted_at.is_(None)).order_by(Client.created_at.desc()).all()
-    headers = ["ID", "First Name", "Last Name", "Email", "Phone", "Status", "Created At"]
+    headers = ["ID", "Type", "Name", "Company Name", "Email", "Phone", "Status", "Created At"]
     rows = [
-        [c.id, c.first_name, c.last_name, c.email or "", c.phone or "", c.status, c.created_at.strftime("%Y-%m-%d")]
+        [c.id, c.client_type, c.display_name, c.company_name or "", c.email or "", c.phone or "", c.status, c.created_at.strftime("%Y-%m-%d")]
         for c in clients
     ]
     return _pdf_response("Client List", headers, rows, "clients.pdf")
@@ -334,7 +335,7 @@ def client_dashboard(
 
     return {
         "client_id": client_id,
-        "client_name": f"{client.first_name} {client.last_name}",
+        "client_name": client.display_name,
         "relationship_health": client.relationship_health if is_override else health["computed_health"],
         "computed_health": health["computed_health"],
         "health_reasons": health["reasons"],

@@ -30,6 +30,7 @@ def global_search(
             or_(
                 Client.first_name.ilike(term),
                 Client.last_name.ilike(term),
+                Client.company_name.ilike(term),
                 Client.email.ilike(term),
                 Client.phone.ilike(term),
             ),
@@ -59,7 +60,7 @@ def global_search(
         "clients": [
             {
                 "id": c.id,
-                "label": f"{c.first_name} {c.last_name}",
+                "label": c.display_name,
                 "subtitle": c.email or c.phone or c.status,
                 "link": f"/dashboard/clients?client_id={c.id}",
             }

@@ -17,6 +17,15 @@ import {
   createTaskTemplate,
 } from "@/lib/api";
 
+function clientDisplayName(client) {
+  if (!client) return "";
+  if ((client.client_type === "business" || client.client_type === "npo") && client.company_name) {
+    return client.company_name;
+  }
+  const name = [client.first_name, client.last_name].filter(Boolean).join(" ");
+  return name || client.company_name || `Client #${client.id}`;
+}
+
 const initialForm = {
   title: "",
   description: "",
@@ -252,7 +261,7 @@ export default function TasksPage() {
 
   function clientLabel(clientId) {
     const match = clients.find((c) => c.id === clientId);
-    return match ? `${match.first_name} ${match.last_name}` : null;
+    return match ? clientDisplayName(match) : null;
   }
 
   function isOverdue(task) {
@@ -461,7 +470,7 @@ export default function TasksPage() {
                     <option value="">None</option>
                     {clients.map((c) => (
                       <option key={c.id} value={c.id}>
-                        {c.first_name} {c.last_name}
+                        {clientDisplayName(c)}
                       </option>
                     ))}
                   </select>
