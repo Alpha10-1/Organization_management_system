@@ -65,6 +65,42 @@ def test_create_project_rejects_end_before_start(admin_client):
     assert resp.status_code == 400
 
 
+def test_create_project_rejects_invalid_risk_level(admin_client):
+    client = _create_client(admin_client, email="badrisk@example.com")
+    resp = admin_client.post(
+        "/projects/",
+        json={"client_id": client["id"], "name": "Bad Risk", "type": "audit", "risk_level": "extreme"},
+    )
+    assert resp.status_code == 400
+
+
+def test_project_compliance_flag_round_trips(admin_client):
+    client = _create_client(admin_client, email="soxflag@example.com")
+    project = _create_project(admin_client, client["id"], compliance_flag="SOX")
+    assert project["compliance_flag"] == "SOX"
+
+    fetched = admin_client.get(f"/projects/{project['id']}").json()
+    assert fetched["compliance_flag"] == "SOX"
+
+
+def test_list_projects_filters_by_risk_level(admin_client):
+    client = _create_client(admin_client, email="riskfilter@example.com")
+    high = _create_project(admin_client, client["id"], name="High Risk Engagement", risk_level="high")
+    low = _create_project(admin_client, client["id"], name="Low Risk Engagement", risk_level="low")
+
+    high_only = admin_client.get("/projects/?risk_level=high").json()
+    assert any(p["id"] == high["id"] for p in high_only)
+    assert all(p["id"] != low["id"] for p in high_only)
+
+
+def test_update_project_rejects_invalid_risk_level(admin_client):
+    client = _create_client(admin_client, email="updatebadrisk@example.com")
+    project = _create_project(admin_client, client["id"])
+
+    resp = admin_client.put(f"/projects/{project['id']}", json={"risk_level": "catastrophic"})
+    assert resp.status_code == 400
+
+
 def test_update_project_status_and_activity_log(admin_client):
     client = _create_client(admin_client, email="statuschange@example.com")
     project = _create_project(admin_client, client["id"])
@@ -72,6 +108,20 @@ def test_update_project_status_and_activity_log(admin_client):
     resp = admin_client.put(f"/projects/{project['id']}", json={"status": "active"})
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "active"
+
+    # The status transition should be captured in the activity log --
+    # feature 6's "lightweight audit log of status changes".
+    logs = admin_client.get("/activity-logs").json()
+    matching = [
+        entry
+        for entry in logs
+        if entry["entity_type"] == "project"
+        and entry["entity_id"] == project["id"]
+        and entry["action"] == "project_updated"
+    ]
+    assert matching, "expected a project_updated activity log entry"
+    assert "planning" in matching[0]["description"]
+    assert "active" in matching[0]["description"]
 
 
 def test_soft_delete_project_excludes_from_list(admin_client):
