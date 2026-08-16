@@ -10,16 +10,18 @@ class DepartmentBase(BaseModel):
 
 
 class DepartmentCreate(DepartmentBase):
-    pass
+    department_head_user_id: Optional[int] = None
 
 
 class DepartmentUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    department_head_user_id: Optional[int] = None
 
 
 class DepartmentOut(DepartmentBase):
     id: int
+    department_head_user_id: Optional[int] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

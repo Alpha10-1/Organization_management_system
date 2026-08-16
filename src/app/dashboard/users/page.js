@@ -9,9 +9,29 @@ import {
   updateUserStatus,
   fetchDepartments,
   createDepartment,
+  updateDepartment,
   deleteDepartment,
   updateUserDepartment,
+  updateUserPosition,
+  fetchOrgChart,
 } from "@/lib/api";
+
+const POSITION_LEVELS = [
+  "associate",
+  "senior_associate",
+  "manager",
+  "senior_manager",
+  "director",
+  "partner",
+];
+
+function positionLabel(position) {
+  if (!position) return "—";
+  return position
+    .split("_")
+    .map((w) => w[0].toUpperCase() + w.slice(1))
+    .join(" ");
+}
 
 const initialForm = {
   name: "",
@@ -19,7 +39,29 @@ const initialForm = {
   password: "",
   role: "staff",
   department_id: "",
+  position: "",
+  manager_id: "",
 };
+
+function OrgChartTree({ nodes, depth = 0 }) {
+  return (
+    <ul className={depth === 0 ? "space-y-3" : "mt-2 space-y-2 border-l border-slate-200 pl-4"}>
+      {nodes.map((node) => (
+        <li key={node.id}>
+          <div className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 text-sm">
+            <span className="font-medium text-slate-800">{node.name}</span>
+            {node.position ? (
+              <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs text-slate-600">
+                {positionLabel(node.position)}
+              </span>
+            ) : null}
+          </div>
+          {node.reports.length > 0 ? <OrgChartTree nodes={node.reports} depth={depth + 1} /> : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 export default function UsersPage() {
   const [currentUserRole, setCurrentUserRole] = useState("");
@@ -33,6 +75,10 @@ export default function UsersPage() {
   const [departments, setDepartments] = useState([]);
   const [newDeptName, setNewDeptName] = useState("");
   const [deptSaving, setDeptSaving] = useState(false);
+
+  const [orgChart, setOrgChart] = useState([]);
+  const [orgChartLoading, setOrgChartLoading] = useState(false);
+  const [showOrgChart, setShowOrgChart] = useState(false);
 
   async function loadUsers() {
     try {
@@ -113,6 +159,54 @@ export default function UsersPage() {
     }
   }
 
+  async function handleUserPositionChange(email, position) {
+    try {
+      setError("");
+      await updateUserPosition(email, { position: position || null });
+      await loadUsers();
+    } catch (err) {
+      setError(err.message || "Failed to update position");
+    }
+  }
+
+  async function handleUserManagerChange(email, managerId) {
+    try {
+      setError("");
+      await updateUserPosition(email, { manager_id: managerId ? Number(managerId) : null });
+      await loadUsers();
+    } catch (err) {
+      setError(err.message || "Failed to update manager");
+    }
+  }
+
+  async function handleDepartmentHeadChange(departmentId, headUserId) {
+    try {
+      setError("");
+      await updateDepartment(departmentId, {
+        department_head_user_id: headUserId ? Number(headUserId) : null,
+      });
+      const updated = await fetchDepartments();
+      setDepartments(updated);
+    } catch (err) {
+      setError(err.message || "Failed to update department head");
+    }
+  }
+
+  async function toggleOrgChart() {
+    const next = !showOrgChart;
+    setShowOrgChart(next);
+    if (next && orgChart.length === 0) {
+      try {
+        setOrgChartLoading(true);
+        setOrgChart(await fetchOrgChart());
+      } catch (err) {
+        setError(err.message || "Failed to load org chart");
+      } finally {
+        setOrgChartLoading(false);
+      }
+    }
+  }
+
   function handleInputChange(e) {
     setForm((prev) => ({
       ...prev,
@@ -129,6 +223,8 @@ export default function UsersPage() {
       await createUser({
         ...form,
         department_id: form.department_id ? Number(form.department_id) : null,
+        position: form.position || null,
+        manager_id: form.manager_id ? Number(form.manager_id) : null,
       });
       setForm(initialForm);
       setShowModal(false);
@@ -170,17 +266,43 @@ export default function UsersPage() {
           </p>
         </div>
 
-        <button
-          onClick={() => setShowModal(true)}
-          className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
-        >
-          Add User
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={toggleOrgChart}
+            className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+          >
+            {showOrgChart ? "Hide Org Chart" : "View Org Chart"}
+          </button>
+          <button
+            onClick={() => setShowModal(true)}
+            className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
+          >
+            Add User
+          </button>
+        </div>
       </div>
 
       {error ? (
         <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
           {error}
+        </div>
+      ) : null}
+
+      {showOrgChart ? (
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">Org Chart</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            Reporting lines across the firm, built from each user&apos;s manager assignment.
+          </p>
+          <div className="mt-4">
+            {orgChartLoading ? (
+              <p className="text-sm text-slate-500">Loading...</p>
+            ) : orgChart.length === 0 ? (
+              <p className="text-sm text-slate-400">No reporting lines set yet.</p>
+            ) : (
+              <OrgChartTree nodes={orgChart} />
+            )}
+          </div>
         </div>
       ) : null}
 
@@ -207,24 +329,39 @@ export default function UsersPage() {
           </button>
         </form>
 
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="mt-4 space-y-2">
           {departments.length === 0 ? (
             <span className="text-sm text-slate-400">No departments yet.</span>
           ) : (
             departments.map((d) => (
-              <span
+              <div
                 key={d.id}
-                className="flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-700"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3"
               >
-                {d.name}
-                <button
-                  onClick={() => handleDeleteDepartment(d.id)}
-                  className="text-xs text-slate-400 hover:text-rose-500"
-                  aria-label={`Delete ${d.name}`}
-                >
-                  ×
-                </button>
-              </span>
+                <span className="text-sm font-medium text-slate-800">{d.name}</span>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-500">Head:</label>
+                  <select
+                    value={d.department_head_user_id ?? ""}
+                    onChange={(e) => handleDepartmentHeadChange(d.id, e.target.value)}
+                    className="rounded-xl border border-slate-300 px-2 py-1.5 text-xs outline-none focus:border-slate-900"
+                  >
+                    <option value="">None</option>
+                    {users.map((u) => (
+                      <option key={u.email} value={u.id}>
+                        {u.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => handleDeleteDepartment(d.id)}
+                    className="text-xs text-slate-400 hover:text-rose-500"
+                    aria-label={`Delete ${d.name}`}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
             ))
           )}
         </div>
@@ -232,13 +369,15 @@ export default function UsersPage() {
 
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[850px] border-separate border-spacing-y-3">
+          <table className="w-full min-w-[1100px] border-separate border-spacing-y-3">
             <thead>
               <tr className="text-left text-sm text-slate-500">
                 <th className="pb-2">Name</th>
                 <th className="pb-2">Email</th>
                 <th className="pb-2">Role</th>
                 <th className="pb-2">Department</th>
+                <th className="pb-2">Position</th>
+                <th className="pb-2">Manager</th>
                 <th className="pb-2">Status</th>
                 <th className="pb-2">Actions</th>
               </tr>
@@ -246,13 +385,13 @@ export default function UsersPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-sm text-slate-500">
+                  <td colSpan={8} className="py-8 text-center text-sm text-slate-500">
                     Loading users...
                   </td>
                 </tr>
               ) : users.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-sm text-slate-500">
+                  <td colSpan={8} className="py-8 text-center text-sm text-slate-500">
                     No users found.
                   </td>
                 </tr>
@@ -285,6 +424,36 @@ export default function UsersPage() {
                             {d.name}
                           </option>
                         ))}
+                      </select>
+                    </td>
+                    <td className="px-4 py-4">
+                      <select
+                        value={user.position ?? ""}
+                        onChange={(e) => handleUserPositionChange(user.email, e.target.value)}
+                        className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
+                      >
+                        <option value="">None</option>
+                        {POSITION_LEVELS.map((p) => (
+                          <option key={p} value={p}>
+                            {positionLabel(p)}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-4 py-4">
+                      <select
+                        value={user.manager_id ?? ""}
+                        onChange={(e) => handleUserManagerChange(user.email, e.target.value)}
+                        className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
+                      >
+                        <option value="">None</option>
+                        {users
+                          .filter((u) => u.id !== user.id)
+                          .map((u) => (
+                            <option key={u.email} value={u.id}>
+                              {u.name}
+                            </option>
+                          ))}
                       </select>
                     </td>
                     <td className="px-4 py-4">
@@ -404,6 +573,44 @@ export default function UsersPage() {
                   {departments.map((d) => (
                     <option key={d.id} value={d.id}>
                       {d.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-700">
+                  Position
+                </label>
+                <select
+                  name="position"
+                  value={form.position}
+                  onChange={handleInputChange}
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                >
+                  <option value="">None</option>
+                  {POSITION_LEVELS.map((p) => (
+                    <option key={p} value={p}>
+                      {positionLabel(p)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-700">
+                  Manager
+                </label>
+                <select
+                  name="manager_id"
+                  value={form.manager_id}
+                  onChange={handleInputChange}
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                >
+                  <option value="">None</option>
+                  {users.map((u) => (
+                    <option key={u.email} value={u.id}>
+                      {u.name}
                     </option>
                   ))}
                 </select>

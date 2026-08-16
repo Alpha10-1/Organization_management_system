@@ -576,6 +576,13 @@ export async function bulkDownloadFiles(fileIds) {
 export const updateUserDepartment = (email, departmentId) =>
   apiSend(`/users/${encodeURIComponent(email)}/department`, "PATCH", { department_id: departmentId });
 
+// --- Staff positions & manager hierarchy -------------------------------------------
+
+export const updateUserPosition = (email, payload) =>
+  apiSend(`/users/${encodeURIComponent(email)}/position`, "PATCH", payload);
+export const fetchOrgChart = () => apiGet("/users/org-chart");
+export const fetchDepartmentDetail = (id) => apiGet(`/departments/${id}`);
+
 // --- Password reset & email verification -------------------------------------------
 
 export const requestPasswordReset = (email) =>
