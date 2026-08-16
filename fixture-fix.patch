@@ -1,0 +1,162 @@
+From b764592553e78c7c2a8770250b8674f25d7329be Mon Sep 17 00:00:00 2001
+From: Alpha10-1 <92021278+Alpha10-1@users.noreply.github.com>
+Date: Sun, 16 Aug 2026 06:39:44 +0000
+Subject: [PATCH] test: give admin_client/staff_client independent cookie jars
+
+admin_client and staff_client previously both wrapped the same
+'client' fixture instance, so a test requesting both fixtures at once
+would silently lose the first login (last login wins on the shared
+cookie jar). Each fixture now logs in on its own TestClient, so a
+single test can safely act as two different logged-in users.
+
+- Removed the ad-hoc _second_client() workaround in test_time_entries.py
+  in favor of using staff_client directly now that it's independent.
+- Added a regression test (test_admin_and_staff_clients_stay_independent)
+  asserting both sessions stay valid and correctly scoped when used
+  together in the same test.
+---
+ backend/tests/conftest.py          | 36 ++++++++++++++++++------------
+ backend/tests/test_auth.py         | 22 ++++++++++++++++++
+ backend/tests/test_time_entries.py | 28 +++++------------------
+ 3 files changed, 50 insertions(+), 36 deletions(-)
+
+diff --git a/backend/tests/conftest.py b/backend/tests/conftest.py
+index 571e847..52eefc1 100644
+--- a/backend/tests/conftest.py
++++ b/backend/tests/conftest.py
+@@ -42,21 +42,29 @@ def client():
+         yield c
+ 
+ 
++def _login(email: str, password: str):
++    """Log in on a brand-new TestClient with its own cookie jar. Each
++    fixture that needs an authenticated user gets an independent client
++    here rather than sharing one -- previously admin_client and
++    staff_client both logged in on the same underlying `client` fixture
++    instance, so requesting both in one test silently left only the
++    second login's cookie (auth bleed-through). Independent jars mean a
++    single test can safely act as two different logged-in users at once.
++    """
++    with TestClient(app) as c:
++        resp = c.post(
++            "/auth/login",
++            data={"username": email, "password": password},
++        )
++        assert resp.status_code == 200, resp.text
++        yield c
++
++
+ @pytest.fixture
+-def admin_client(client):
+-    resp = client.post(
+-        "/auth/login",
+-        data={"username": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
+-    )
+-    assert resp.status_code == 200, resp.text
+-    return client
++def admin_client():
++    yield from _login(ADMIN_EMAIL, ADMIN_PASSWORD)
+ 
+ 
+ @pytest.fixture
+-def staff_client(client):
+-    resp = client.post(
+-        "/auth/login",
+-        data={"username": STAFF_EMAIL, "password": STAFF_PASSWORD},
+-    )
+-    assert resp.status_code == 200, resp.text
+-    return client
++def staff_client():
++    yield from _login(STAFF_EMAIL, STAFF_PASSWORD)
+diff --git a/backend/tests/test_auth.py b/backend/tests/test_auth.py
+index b8b5c2b..9130b99 100644
+--- a/backend/tests/test_auth.py
++++ b/backend/tests/test_auth.py
+@@ -117,3 +117,25 @@ def test_successful_login_resets_rate_limit_counter(client):
+         data={"username": STAFF_EMAIL, "password": "wrong-password"},
+     )
+     assert resp.status_code == 401
++
++
++def test_admin_and_staff_clients_stay_independent(admin_client, staff_client):
++    """Regression test: admin_client and staff_client used to share a
++    single TestClient/cookie jar, so requesting both in one test left only
++    the second login's session active (auth bleed-through). Each fixture
++    now gets its own independent client, so both sessions must remain
++    valid and correctly scoped for the lifetime of the test."""
++    admin_me = admin_client.get("/auth/me")
++    staff_me = staff_client.get("/auth/me")
++    assert admin_me.status_code == 200
++    assert staff_me.status_code == 200
++    assert admin_me.json()["email"] == ADMIN_EMAIL
++    assert staff_me.json()["email"] == STAFF_EMAIL
++    assert admin_me.json()["role"] == "admin"
++    assert staff_me.json()["role"] == "staff"
++
++    # Re-check admin_client after using staff_client, to confirm the
++    # second login didn't clobber the first client's session.
++    admin_me_again = admin_client.get("/auth/me")
++    assert admin_me_again.status_code == 200
++    assert admin_me_again.json()["email"] == ADMIN_EMAIL
+diff --git a/backend/tests/test_time_entries.py b/backend/tests/test_time_entries.py
+index 10d9ca8..92998e8 100644
+--- a/backend/tests/test_time_entries.py
++++ b/backend/tests/test_time_entries.py
+@@ -1,22 +1,8 @@
+-from fastapi.testclient import TestClient
+-
+-from app.main import app
+-from tests.conftest import ADMIN_EMAIL, ADMIN_PASSWORD, STAFF_EMAIL, STAFF_PASSWORD
++from tests.conftest import ADMIN_EMAIL, STAFF_EMAIL
+ from tests.test_new_features import _create_client
+ from tests.test_projects import _create_project
+ 
+ 
+-def _second_client(email: str, password: str) -> TestClient:
+-    """A genuinely independent TestClient (own cookie jar), needed whenever
+-    a single test acts as two different logged-in users -- the admin_client
+-    and staff_client fixtures share one cookie jar under the hood, so the
+-    second login silently overwrites the first."""
+-    c = TestClient(app)
+-    resp = c.post("/auth/login", data={"username": email, "password": password})
+-    assert resp.status_code == 200, resp.text
+-    return c
+-
+-
+ def _create_time_entry(client, project_id, **overrides):
+     payload = {
+         "project_id": project_id,
+@@ -121,25 +107,23 @@ def test_update_and_delete_own_time_entry(admin_client):
+     assert resp.status_code == 404
+ 
+ 
+-def test_staff_cannot_edit_others_time_entry(admin_client):
++def test_staff_cannot_edit_others_time_entry(admin_client, staff_client):
+     client = _create_client(admin_client, email="time-perm@example.com")
+     project = _create_project(admin_client, client["id"])
+     entry = _create_time_entry(admin_client, project["id"])
+ 
+-    staff = _second_client(STAFF_EMAIL, STAFF_PASSWORD)
+-    resp = staff.put(f"/time-entries/{entry['id']}", json={"hours": "1.0"})
++    resp = staff_client.put(f"/time-entries/{entry['id']}", json={"hours": "1.0"})
+     assert resp.status_code == 403
+ 
+-    resp = staff.delete(f"/time-entries/{entry['id']}")
++    resp = staff_client.delete(f"/time-entries/{entry['id']}")
+     assert resp.status_code == 403
+ 
+ 
+-def test_staff_cannot_log_time_for_another_user(admin_client):
++def test_staff_cannot_log_time_for_another_user(admin_client, staff_client):
+     client = _create_client(admin_client, email="time-onbehalf@example.com")
+     project = _create_project(admin_client, client["id"])
+ 
+-    staff = _second_client(STAFF_EMAIL, STAFF_PASSWORD)
+-    resp = staff.post(
++    resp = staff_client.post(
+         "/time-entries/",
+         json={
+             "project_id": project["id"],
+-- 
+2.43.0
+
