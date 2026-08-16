@@ -157,8 +157,22 @@ database.
 alembic upgrade head
 ```
 
-This is safe to run on a brand-new database (it creates the schema from
-scratch) or an existing one (it applies only what's missing).
+**Note:** the baseline migration assumes the schema already exists — it was
+originally captured from a database built via `Base.metadata.create_all`,
+not from empty tables, so `alembic upgrade head` alone will fail against a
+truly empty `organization.db` (`no such table: clients`). Starting the
+app once (`uvicorn app.main:app`) runs `create_all` automatically, so the
+usual flow is:
+
+```bash
+rm -f organization.db          # optional: start clean
+python -c "from app.db.session import Base, engine; import app.db.base; Base.metadata.create_all(bind=engine)"
+alembic stamp head              # mark the create_all'd schema as up to date
+```
+
+If you're picking up an *existing* database that was already tracked by
+Alembic (e.g. from a previous session), just run `alembic upgrade head`
+directly — it applies cleanly on top.
 
 ### Run backend
 
