@@ -117,3 +117,25 @@ def test_successful_login_resets_rate_limit_counter(client):
         data={"username": STAFF_EMAIL, "password": "wrong-password"},
     )
     assert resp.status_code == 401
+
+
+def test_admin_and_staff_clients_stay_independent(admin_client, staff_client):
+    """Regression test: admin_client and staff_client used to share a
+    single TestClient/cookie jar, so requesting both in one test left only
+    the second login's session active (auth bleed-through). Each fixture
+    now gets its own independent client, so both sessions must remain
+    valid and correctly scoped for the lifetime of the test."""
+    admin_me = admin_client.get("/auth/me")
+    staff_me = staff_client.get("/auth/me")
+    assert admin_me.status_code == 200
+    assert staff_me.status_code == 200
+    assert admin_me.json()["email"] == ADMIN_EMAIL
+    assert staff_me.json()["email"] == STAFF_EMAIL
+    assert admin_me.json()["role"] == "admin"
+    assert staff_me.json()["role"] == "staff"
+
+    # Re-check admin_client after using staff_client, to confirm the
+    # second login didn't clobber the first client's session.
+    admin_me_again = admin_client.get("/auth/me")
+    assert admin_me_again.status_code == 200
+    assert admin_me_again.json()["email"] == ADMIN_EMAIL

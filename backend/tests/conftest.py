@@ -42,21 +42,29 @@ def client():
         yield c
 
 
-@pytest.fixture
-def admin_client(client):
-    resp = client.post(
-        "/auth/login",
-        data={"username": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
-    )
-    assert resp.status_code == 200, resp.text
-    return client
+def _login(email: str, password: str):
+    """Log in on a brand-new TestClient with its own cookie jar. Each
+    fixture that needs an authenticated user gets an independent client
+    here rather than sharing one -- previously admin_client and
+    staff_client both logged in on the same underlying `client` fixture
+    instance, so requesting both in one test silently left only the
+    second login's cookie (auth bleed-through). Independent jars mean a
+    single test can safely act as two different logged-in users at once.
+    """
+    with TestClient(app) as c:
+        resp = c.post(
+            "/auth/login",
+            data={"username": email, "password": password},
+        )
+        assert resp.status_code == 200, resp.text
+        yield c
 
 
 @pytest.fixture
-def staff_client(client):
-    resp = client.post(
-        "/auth/login",
-        data={"username": STAFF_EMAIL, "password": STAFF_PASSWORD},
-    )
-    assert resp.status_code == 200, resp.text
-    return client
+def admin_client():
+    yield from _login(ADMIN_EMAIL, ADMIN_PASSWORD)
+
+
+@pytest.fixture
+def staff_client():
+    yield from _login(STAFF_EMAIL, STAFF_PASSWORD)

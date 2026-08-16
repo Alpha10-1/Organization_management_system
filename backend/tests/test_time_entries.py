@@ -1,20 +1,6 @@
-from fastapi.testclient import TestClient
-
-from app.main import app
-from tests.conftest import ADMIN_EMAIL, ADMIN_PASSWORD, STAFF_EMAIL, STAFF_PASSWORD
+from tests.conftest import ADMIN_EMAIL, STAFF_EMAIL
 from tests.test_new_features import _create_client
 from tests.test_projects import _create_project
-
-
-def _second_client(email: str, password: str) -> TestClient:
-    """A genuinely independent TestClient (own cookie jar), needed whenever
-    a single test acts as two different logged-in users -- the admin_client
-    and staff_client fixtures share one cookie jar under the hood, so the
-    second login silently overwrites the first."""
-    c = TestClient(app)
-    resp = c.post("/auth/login", data={"username": email, "password": password})
-    assert resp.status_code == 200, resp.text
-    return c
 
 
 def _create_time_entry(client, project_id, **overrides):
@@ -121,25 +107,23 @@ def test_update_and_delete_own_time_entry(admin_client):
     assert resp.status_code == 404
 
 
-def test_staff_cannot_edit_others_time_entry(admin_client):
+def test_staff_cannot_edit_others_time_entry(admin_client, staff_client):
     client = _create_client(admin_client, email="time-perm@example.com")
     project = _create_project(admin_client, client["id"])
     entry = _create_time_entry(admin_client, project["id"])
 
-    staff = _second_client(STAFF_EMAIL, STAFF_PASSWORD)
-    resp = staff.put(f"/time-entries/{entry['id']}", json={"hours": "1.0"})
+    resp = staff_client.put(f"/time-entries/{entry['id']}", json={"hours": "1.0"})
     assert resp.status_code == 403
 
-    resp = staff.delete(f"/time-entries/{entry['id']}")
+    resp = staff_client.delete(f"/time-entries/{entry['id']}")
     assert resp.status_code == 403
 
 
-def test_staff_cannot_log_time_for_another_user(admin_client):
+def test_staff_cannot_log_time_for_another_user(admin_client, staff_client):
     client = _create_client(admin_client, email="time-onbehalf@example.com")
     project = _create_project(admin_client, client["id"])
 
-    staff = _second_client(STAFF_EMAIL, STAFF_PASSWORD)
-    resp = staff.post(
+    resp = staff_client.post(
         "/time-entries/",
         json={
             "project_id": project["id"],
