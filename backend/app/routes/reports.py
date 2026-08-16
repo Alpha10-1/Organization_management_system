@@ -5,6 +5,7 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from fpdf import FPDF
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.core.client_health import compute_client_health
@@ -367,4 +368,88 @@ def client_dashboard(
             {"id": t.id, "title": t.title, "due_date": t.due_date} for t in overdue_tasks
         ],
         "overdue_task_count": len(overdue_tasks),
+    }
+
+
+@router.get("/dashboard/compliance")
+def compliance_dashboard(
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    """Firm-wide risk/compliance rollup: every open (non-completed,
+    non-cancelled) engagement flagged high/medium risk or carrying a
+    compliance flag, plus the most recent risk/compliance-relevant
+    activity across all engagements. This is the read-layer partners or a
+    risk committee would use to see exposure across the whole firm at a
+    glance, rather than one engagement or one partner at a time."""
+    open_statuses = ("planning", "active", "on_hold")
+
+    flagged_projects = (
+        db.query(Project)
+        .filter(
+            Project.deleted_at.is_(None),
+            Project.status.in_(open_statuses),
+            (Project.risk_level.in_(["high", "medium"])) | (Project.compliance_flag.isnot(None)),
+        )
+        .order_by(
+            case((Project.risk_level == "high", 0), (Project.risk_level == "medium", 1), else_=2),
+            Project.name.asc(),
+        )
+        .all()
+    )
+    project_ids = [p.id for p in flagged_projects]
+
+    overdue_by_project: dict[int, int] = {}
+    if project_ids:
+        overdue_rows = (
+            db.query(Task.project_id, func.count(Task.id))
+            .filter(
+                Task.project_id.in_(project_ids),
+                Task.deleted_at.is_(None),
+                Task.status != "done",
+                Task.due_date.isnot(None),
+                Task.due_date < utcnow(),
+            )
+            .group_by(Task.project_id)
+            .all()
+        )
+        overdue_by_project = dict(overdue_rows)
+
+    recent_changes = (
+        db.query(ActivityLog)
+        .filter(ActivityLog.entity_type == "project", ActivityLog.action == "project_risk_changed")
+        .order_by(ActivityLog.created_at.desc())
+        .limit(25)
+        .all()
+    )
+
+    return {
+        "generated_at": utcnow(),
+        "high_risk_count": sum(1 for p in flagged_projects if p.risk_level == "high"),
+        "medium_risk_count": sum(1 for p in flagged_projects if p.risk_level == "medium"),
+        "compliance_flagged_count": sum(1 for p in flagged_projects if p.compliance_flag),
+        "engagements": [
+            {
+                "id": p.id,
+                "name": p.name,
+                "client_id": p.client_id,
+                "type": p.type,
+                "status": p.status,
+                "risk_level": p.risk_level,
+                "compliance_flag": p.compliance_flag,
+                "engagement_partner_name": p.engagement_partner_name,
+                "overdue_task_count": overdue_by_project.get(p.id, 0),
+            }
+            for p in flagged_projects
+        ],
+        "recent_risk_changes": [
+            {
+                "project_id": log.entity_id,
+                "title": log.title,
+                "description": log.description,
+                "user_name": log.user_name,
+                "created_at": log.created_at,
+            }
+            for log in recent_changes
+        ],
     }

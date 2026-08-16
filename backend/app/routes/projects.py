@@ -6,6 +6,7 @@ from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user, get_user_by_email
 from app.core.time import utcnow
 from app.db.session import get_db
+from app.models.activity_log import ActivityLog
 from app.models.client import Client
 from app.models.department import Department
 from app.models.project import Project
@@ -219,6 +220,8 @@ def update_project(
         raise HTTPException(status_code=400, detail="end_date cannot be before start_date")
 
     previous_status = project.status
+    previous_risk_level = project.risk_level
+    previous_compliance_flag = project.compliance_flag
 
     if "engagement_partner_email" in updates:
         email = updates.pop("engagement_partner_email")
@@ -250,6 +253,23 @@ def update_project(
     db.commit()
     db.refresh(project)
 
+    status_changed = "status" in updates and updates["status"] != previous_status
+    risk_changed = "risk_level" in updates and updates["risk_level"] != previous_risk_level
+    compliance_changed = (
+        "compliance_flag" in updates and updates["compliance_flag"] != previous_compliance_flag
+    )
+
+    change_notes = []
+    if status_changed:
+        change_notes.append(f"Status changed from '{previous_status}' to '{project.status}'.")
+    if risk_changed:
+        change_notes.append(f"Risk level changed from '{previous_risk_level}' to '{project.risk_level}'.")
+    if compliance_changed:
+        change_notes.append(
+            f"Compliance flag changed from '{previous_compliance_flag or 'none'}' "
+            f"to '{project.compliance_flag or 'none'}'."
+        )
+
     log_activity(
         db=db,
         user=current_user,
@@ -257,12 +277,31 @@ def update_project(
         entity_type="project",
         entity_id=project.id,
         title=f"Engagement updated: {project.name}",
-        description=(
-            f"Status changed from '{previous_status}' to '{project.status}'."
-            if "status" in updates and updates["status"] != previous_status
-            else "Engagement record updated."
-        ),
+        description=" ".join(change_notes) if change_notes else "Engagement record updated.",
     )
+
+    # Risk/compliance changes are logged as a second, distinctly-actioned
+    # entry so a compliance audit trail can be queried without having to
+    # parse free-text descriptions of general "project_updated" events.
+    if risk_changed or compliance_changed:
+        log_activity(
+            db=db,
+            user=current_user,
+            action="project_risk_changed",
+            entity_type="project",
+            entity_id=project.id,
+            title=f"Risk/compliance updated: {project.name}",
+            description=" ".join(
+                note for note in [
+                    f"Risk level changed from '{previous_risk_level}' to '{project.risk_level}'."
+                    if risk_changed else None,
+                    f"Compliance flag changed from '{previous_compliance_flag or 'none'}' "
+                    f"to '{project.compliance_flag or 'none'}'."
+                    if compliance_changed else None,
+                ]
+                if note
+            ),
+        )
 
     return project
 
@@ -291,6 +330,43 @@ def delete_project(
     )
 
     return {"message": "Project deleted successfully"}
+
+
+@router.get("/{project_id}/history")
+def get_project_history(
+    project_id: int,
+    limit: int = Query(default=100, le=500),
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    """Lightweight audit trail for an engagement: every logged status,
+    risk-level and compliance-flag change, newest first. Reuses the
+    existing ActivityLog table rather than a separate audit model -- an
+    engagement's history is just its activity log filtered to itself."""
+    project = db.query(Project).filter(Project.id == project_id, Project.deleted_at.is_(None)).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    logs = (
+        db.query(ActivityLog)
+        .filter(ActivityLog.entity_type == "project", ActivityLog.entity_id == project_id)
+        .order_by(ActivityLog.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        {
+            "id": log.id,
+            "action": log.action,
+            "title": log.title,
+            "description": log.description,
+            "user_name": log.user_name,
+            "user_email": log.user_email,
+            "created_at": log.created_at,
+        }
+        for log in logs
+    ]
 
 
 # --- Team assignment (individuals or whole departments) -------------------

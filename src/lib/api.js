@@ -660,6 +660,10 @@ export const deleteTaskTemplate = (id) => apiDelete(`/task-templates/${id}`);
 export const applyTaskTemplate = (id, payload) =>
   apiSend(`/task-templates/${id}/apply`, "POST", payload);
 
+// --- Engagement audit trail ------------------------------------------------------------
+
+export const fetchProjectHistory = (projectId) => apiGet(`/projects/${projectId}/history`);
+
 // --- Task detail, subtasks & dependencies ---------------------------------------------
 
 export const fetchTaskDetail = (taskId) => apiGet(`/tasks/${taskId}/detail`);
@@ -693,3 +697,4 @@ export const fetchProjectUtilization = (projectId) =>
 export const fetchPartnerDashboard = (partnerEmail) =>
   apiGet(`/reports/dashboard/partner?partner_email=${encodeURIComponent(partnerEmail)}`);
 export const fetchClientDashboard = (clientId) => apiGet(`/reports/dashboard/client/${clientId}`);
+export const fetchComplianceDashboard = () => apiGet("/reports/dashboard/compliance");
