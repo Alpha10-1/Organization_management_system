@@ -28,6 +28,7 @@ import {
   fetchProjectAssignments,
   createProjectAssignment,
   deleteProjectAssignment,
+  fetchProjectHistory,
 } from "@/lib/api";
 
 const PROJECT_TYPES = ["audit", "tax", "advisory", "systems_implementation", "other"];
@@ -149,6 +150,9 @@ export default function ProjectsPage() {
   const [assignmentForm, setAssignmentForm] = useState(initialAssignmentForm);
   const [assigningTeam, setAssigningTeam] = useState(false);
 
+  const [history, setHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
   async function loadProjects() {
     try {
       setLoading(true);
@@ -185,19 +189,22 @@ export default function ProjectsPage() {
   async function loadProjectDetail(project) {
     setSelectedProject(project);
     setActiveTab("overview");
+    setHistoryLoading(true);
     try {
-      const [ms, cs, te, util, as] = await Promise.all([
+      const [ms, cs, te, util, as, hist] = await Promise.all([
         fetchMilestones({ project_id: project.id }),
         fetchContracts({ project_id: project.id }),
         fetchTimeEntries({ project_id: project.id }),
         fetchProjectUtilization(project.id).catch(() => null),
         fetchProjectAssignments(project.id).catch(() => []),
+        fetchProjectHistory(project.id).catch(() => []),
       ]);
       setMilestones(ms);
       setContracts(cs);
       setTimeEntries(te);
       setUtilization(util);
       setAssignments(as);
+      setHistory(hist);
 
       const margins = {};
       await Promise.all(
@@ -212,6 +219,8 @@ export default function ProjectsPage() {
       setContractMargins(margins);
     } catch (err) {
       setError(err.message || "Failed to load project detail");
+    } finally {
+      setHistoryLoading(false);
     }
   }
 
@@ -511,6 +520,7 @@ export default function ProjectsPage() {
       { id: "contracts", label: `Contracts (${contracts.length})` },
       { id: "time", label: `Time (${timeEntries.length})` },
       { id: "template", label: "Apply Template" },
+      { id: "history", label: "History" },
     ],
     [assignments.length, milestones.length, contracts.length, timeEntries.length]
   );
@@ -1037,6 +1047,50 @@ export default function ProjectsPage() {
                       No task templates exist yet. Create one from the Tasks page.
                     </p>
                   ) : null}
+                </div>
+              ) : null}
+
+              {activeTab === "history" ? (
+                <div className="mt-4 space-y-3">
+                  <p className="text-sm text-slate-500">
+                    Audit trail of status, risk-level and compliance-flag changes for this
+                    engagement, newest first.
+                  </p>
+                  {historyLoading ? (
+                    <p className="text-sm text-slate-400">Loading history...</p>
+                  ) : history.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-sm text-slate-500">
+                      No activity recorded yet.
+                    </div>
+                  ) : (
+                    <ul className="space-y-2">
+                      {history.map((entry) => (
+                        <li
+                          key={entry.id}
+                          className="rounded-2xl border border-slate-200 bg-white px-4 py-3"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <span
+                                className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize ${
+                                  entry.action === "project_risk_changed"
+                                    ? "bg-amber-100 text-amber-700"
+                                    : "bg-slate-100 text-slate-600"
+                                }`}
+                              >
+                                {entry.action?.replaceAll("_", " ")}
+                              </span>
+                              <p className="mt-1 text-sm text-slate-700">{entry.description}</p>
+                            </div>
+                            <div className="shrink-0 text-right text-xs text-slate-400">
+                              <p>{new Date(entry.created_at).toLocaleString()}</p>
+                              <p>{entry.user_name || entry.user_email}</p>
+                            </div>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               ) : null}
             </div>

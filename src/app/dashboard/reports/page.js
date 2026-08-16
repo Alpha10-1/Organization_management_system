@@ -13,6 +13,7 @@ import {
   fetchClients,
   fetchPartnerDashboard,
   fetchClientDashboard,
+  fetchComplianceDashboard,
 } from "@/lib/api";
 
 function clientDisplayName(client) {
@@ -257,6 +258,112 @@ function ClientDashboardPanel() {
   );
 }
 
+function ComplianceDashboardPanel() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setLoading(true);
+    setError("");
+    fetchComplianceDashboard()
+      .then(setData)
+      .catch((err) => setError(err.message || "Failed to load compliance dashboard"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <p className="text-sm text-slate-500">Loading...</p>;
+  if (error) {
+    return (
+      <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+        {error}
+      </div>
+    );
+  }
+  if (!data) return null;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-500">
+        Every open engagement flagged high/medium risk or carrying a compliance flag, across
+        the whole firm — the view a risk committee would use rather than one partner at a time.
+      </p>
+
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <p className="text-xs text-slate-500">High Risk</p>
+          <p className="mt-1 text-2xl font-bold text-rose-600">{data.high_risk_count}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <p className="text-xs text-slate-500">Medium Risk</p>
+          <p className="mt-1 text-2xl font-bold text-amber-600">{data.medium_risk_count}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <p className="text-xs text-slate-500">Compliance Flagged</p>
+          <p className="mt-1 text-2xl font-bold text-slate-900">{data.compliance_flagged_count}</p>
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-2 text-sm font-semibold text-slate-700">Flagged Engagements</p>
+        <div className="space-y-2">
+          {data.engagements.length === 0 ? (
+            <p className="text-sm text-slate-400">
+              No open engagements are currently high/medium risk or compliance-flagged.
+            </p>
+          ) : (
+            data.engagements.map((e) => (
+              <div key={e.id} className="rounded-xl border border-slate-200 bg-white p-3 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-medium text-slate-800">{e.name}</p>
+                  <span
+                    className={`shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-semibold capitalize ${
+                      e.risk_level === "high"
+                        ? "bg-rose-100 text-rose-700"
+                        : e.risk_level === "medium"
+                        ? "bg-amber-100 text-amber-700"
+                        : "bg-slate-100 text-slate-600"
+                    }`}
+                  >
+                    {e.risk_level} risk
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                  {e.type} · {e.status}
+                  {e.engagement_partner_name ? ` · ${e.engagement_partner_name}` : ""}
+                  {e.compliance_flag ? ` · Flag: ${e.compliance_flag}` : ""}
+                  {e.overdue_task_count > 0 ? (
+                    <span className="ml-2 font-semibold text-rose-600">
+                      {e.overdue_task_count} overdue task{e.overdue_task_count === 1 ? "" : "s"}
+                    </span>
+                  ) : null}
+                </p>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-2 text-sm font-semibold text-slate-700">Recent Risk/Compliance Changes</p>
+        <div className="space-y-1">
+          {data.recent_risk_changes.length === 0 ? (
+            <p className="text-sm text-slate-400">No recent risk or compliance changes.</p>
+          ) : (
+            data.recent_risk_changes.map((c, idx) => (
+              <p key={`${c.project_id}-${idx}`} className="text-sm text-slate-600">
+                <span className="text-xs text-slate-400">{formatDateTime(c.created_at)}</span>{" "}
+                — {c.description}{" "}
+                <span className="text-xs text-slate-400">({c.user_name})</span>
+              </p>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function formatDateTime(dateString) {
   const date = new Date(dateString);
   return date.toLocaleString();
@@ -432,10 +539,24 @@ export default function ReportsPage() {
           >
             Per-Client
           </button>
+          <button
+            onClick={() => setDashboardTab("compliance")}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              dashboardTab === "compliance" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+            }`}
+          >
+            Compliance
+          </button>
         </div>
 
         <div className="mt-4">
-          {dashboardTab === "partner" ? <PartnerDashboardPanel /> : <ClientDashboardPanel />}
+          {dashboardTab === "partner" ? (
+            <PartnerDashboardPanel />
+          ) : dashboardTab === "client" ? (
+            <ClientDashboardPanel />
+          ) : (
+            <ComplianceDashboardPanel />
+          )}
         </div>
       </div>
 
