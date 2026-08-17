@@ -24,6 +24,12 @@ class ProjectAssignment(Base):
     # "Field Lead". Optional -- most assignments don't need one.
     role = Column(String(100), nullable=True)
 
+    # Planned % of this person's capacity committed to the engagement
+    # while it's active (e.g. 50 = half their time). Only meaningful for
+    # individual (user_id) assignments -- a department assignment staffs
+    # the whole team without a per-person split, so it's left null there.
+    allocation_percent = Column(Integer, nullable=True)
+
     assigned_by_email = Column(String(255), nullable=False)
     assigned_by_name = Column(String(255), nullable=False)
 

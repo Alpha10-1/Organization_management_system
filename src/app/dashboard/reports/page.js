@@ -14,6 +14,7 @@ import {
   fetchPartnerDashboard,
   fetchClientDashboard,
   fetchComplianceDashboard,
+  fetchCapacityDashboard,
 } from "@/lib/api";
 
 function clientDisplayName(client) {
@@ -364,6 +365,110 @@ function ComplianceDashboardPanel() {
   );
 }
 
+function CapacityDashboardPanel() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setLoading(true);
+    setError("");
+    fetchCapacityDashboard()
+      .then(setData)
+      .catch((err) => setError(err.message || "Failed to load capacity dashboard"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <p className="text-sm text-slate-500">Loading...</p>;
+  if (error) {
+    return (
+      <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+        {error}
+      </div>
+    );
+  }
+  if (!data) return null;
+
+  const statusStyles = {
+    over_allocated: "bg-rose-100 text-rose-700",
+    under_allocated: "bg-amber-100 text-amber-700",
+    bench: "bg-slate-200 text-slate-600",
+    fully_allocated: "bg-emerald-100 text-emerald-700",
+  };
+  const statusLabels = {
+    over_allocated: "Over-allocated",
+    under_allocated: "Under-allocated",
+    bench: "Bench",
+    fully_allocated: "Fully allocated",
+  };
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-500">
+        Planned % of each active staff member&apos;s time committed across open engagements, so
+        you can see over- and under-allocation before assigning new work. Only individual
+        assignments carry a percentage — department-wide staffing isn&apos;t split per person.
+      </p>
+
+      <div className="grid grid-cols-3 gap-4">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <p className="text-xs text-slate-500">Over-allocated</p>
+          <p className="mt-1 text-2xl font-bold text-rose-600">{data.over_allocated_count}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <p className="text-xs text-slate-500">Under-allocated</p>
+          <p className="mt-1 text-2xl font-bold text-amber-600">{data.under_allocated_count}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <p className="text-xs text-slate-500">On the Bench</p>
+          <p className="mt-1 text-2xl font-bold text-slate-700">{data.bench_count}</p>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {data.people.length === 0 ? (
+          <p className="text-sm text-slate-400">No active staff members.</p>
+        ) : (
+          data.people.map((p) => (
+            <div key={p.id} className="rounded-xl border border-slate-200 bg-white p-3 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-medium text-slate-800">
+                    {p.name}
+                    {p.position ? (
+                      <span className="ml-2 text-xs font-normal text-slate-400">
+                        {p.position.replaceAll("_", " ")}
+                      </span>
+                    ) : null}
+                  </p>
+                  {p.engagements.length > 0 ? (
+                    <p className="mt-1 text-xs text-slate-500">
+                      {p.engagements.map((e) => e.project_name).join(", ")}
+                      {p.unspecified_allocation_count > 0
+                        ? ` (${p.unspecified_allocation_count} without a % set)`
+                        : ""}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="text-xs font-semibold text-slate-600">
+                    {p.total_allocated_percent}%
+                  </span>
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold ${statusStyles[p.status]}`}
+                  >
+                    {statusLabels[p.status]}
+                  </span>
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 function formatDateTime(dateString) {
   const date = new Date(dateString);
   return date.toLocaleString();
@@ -547,6 +652,14 @@ export default function ReportsPage() {
           >
             Compliance
           </button>
+          <button
+            onClick={() => setDashboardTab("capacity")}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              dashboardTab === "capacity" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+            }`}
+          >
+            Capacity
+          </button>
         </div>
 
         <div className="mt-4">
@@ -554,8 +667,10 @@ export default function ReportsPage() {
             <PartnerDashboardPanel />
           ) : dashboardTab === "client" ? (
             <ClientDashboardPanel />
-          ) : (
+          ) : dashboardTab === "compliance" ? (
             <ComplianceDashboardPanel />
+          ) : (
+            <CapacityDashboardPanel />
           )}
         </div>
       </div>

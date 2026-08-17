@@ -14,7 +14,11 @@ from app.models.project_assignment import ProjectAssignment
 from app.models.task import Task
 from app.models.user import User
 from app.schemas.project import ProjectCreate, ProjectOut, ProjectSummary, ProjectUpdate
-from app.schemas.project_assignment import ProjectAssignmentCreate, ProjectAssignmentOut
+from app.schemas.project_assignment import (
+    ProjectAssignmentCreate,
+    ProjectAssignmentOut,
+    ProjectAssignmentUpdate,
+)
 from app.schemas.user import UserPublic
 
 router = APIRouter(prefix="/projects", tags=["Projects"])
@@ -390,6 +394,7 @@ def _assignment_out(db: Session, assignment: ProjectAssignment) -> ProjectAssign
         user_name=user_name,
         department_name=department_name,
         role=assignment.role,
+        allocation_percent=assignment.allocation_percent,
         assigned_by_email=assignment.assigned_by_email,
         assigned_by_name=assignment.assigned_by_name,
         created_at=assignment.created_at,
@@ -454,6 +459,7 @@ def add_project_assignment(
         user_id=payload.user_id,
         department_id=payload.department_id,
         role=payload.role,
+        allocation_percent=payload.allocation_percent,
         assigned_by_email=current_user.email,
         assigned_by_name=current_user.name,
     )
@@ -472,6 +478,37 @@ def add_project_assignment(
         description=f"Assigned {target} to engagement '{project.name}'" + (f" as {payload.role}." if payload.role else "."),
     )
 
+    return _assignment_out(db, assignment)
+
+
+@router.put("/{project_id}/assignments/{assignment_id}", response_model=ProjectAssignmentOut)
+def update_project_assignment(
+    project_id: int,
+    assignment_id: int,
+    payload: ProjectAssignmentUpdate,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    assignment = (
+        db.query(ProjectAssignment)
+        .filter(ProjectAssignment.id == assignment_id, ProjectAssignment.project_id == project_id)
+        .first()
+    )
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    updates = payload.model_dump(exclude_unset=True)
+    if "allocation_percent" in updates and updates["allocation_percent"] is not None and not assignment.user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="allocation_percent only applies to individual (user_id) assignments",
+        )
+
+    for key, value in updates.items():
+        setattr(assignment, key, value)
+
+    db.commit()
+    db.refresh(assignment)
     return _assignment_out(db, assignment)
 
 

@@ -616,8 +616,11 @@ export const deleteProject = (id) => apiDelete(`/projects/${id}`);
 export const fetchProjectAssignments = (projectId) => apiGet(`/projects/${projectId}/assignments`);
 export const createProjectAssignment = (projectId, payload) =>
   apiSend(`/projects/${projectId}/assignments`, "POST", payload);
+export const updateProjectAssignment = (projectId, assignmentId, payload) =>
+  apiSend(`/projects/${projectId}/assignments/${assignmentId}`, "PUT", payload);
 export const deleteProjectAssignment = (projectId, assignmentId) =>
   apiDelete(`/projects/${projectId}/assignments/${assignmentId}`);
+export const fetchCapacityDashboard = () => apiGet("/reports/dashboard/capacity");
 
 // --- Client contacts & hierarchy --------------------------------------------------
 

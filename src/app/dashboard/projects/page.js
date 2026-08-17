@@ -27,9 +27,12 @@ import {
   applyTaskTemplate,
   fetchProjectAssignments,
   createProjectAssignment,
+  updateProjectAssignment,
   deleteProjectAssignment,
   fetchProjectHistory,
 } from "@/lib/api";
+
+const initialAssignmentForm = { target_type: "user", target_id: "", role: "", allocation_percent: "" };
 
 const PROJECT_TYPES = ["audit", "tax", "advisory", "systems_implementation", "other"];
 const PROJECT_STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"];
@@ -68,8 +71,6 @@ const initialProjectForm = {
   stakeholders: "",
   billing_notes: "",
 };
-
-const initialAssignmentForm = { target_type: "user", target_id: "", role: "" };
 
 const initialMilestoneForm = { name: "", description: "", due_date: "", status: "pending" };
 
@@ -341,7 +342,13 @@ export default function ProjectsPage() {
       const payload =
         assignmentForm.target_type === "department"
           ? { department_id: Number(assignmentForm.target_id), role: assignmentForm.role || undefined }
-          : { user_id: Number(assignmentForm.target_id), role: assignmentForm.role || undefined };
+          : {
+              user_id: Number(assignmentForm.target_id),
+              role: assignmentForm.role || undefined,
+              allocation_percent: assignmentForm.allocation_percent
+                ? Number(assignmentForm.allocation_percent)
+                : undefined,
+            };
       await createProjectAssignment(selectedProject.id, payload);
       setAssignmentForm(initialAssignmentForm);
       await refreshDetail();
@@ -349,6 +356,19 @@ export default function ProjectsPage() {
       setError(err.message || "Failed to assign team member");
     } finally {
       setAssigningTeam(false);
+    }
+  }
+
+  async function handleUpdateAssignmentAllocation(assignment, allocationPercent) {
+    if (!selectedProject) return;
+    try {
+      setError("");
+      await updateProjectAssignment(selectedProject.id, assignment.id, {
+        allocation_percent: allocationPercent ? Number(allocationPercent) : null,
+      });
+      await refreshDetail();
+    } catch (err) {
+      setError(err.message || "Failed to update allocation");
     }
   }
 
@@ -821,12 +841,33 @@ export default function ProjectsPage() {
                             </p>
                             {a.role ? <p className="text-xs text-slate-500">{a.role}</p> : null}
                           </div>
-                          <button
-                            onClick={() => handleRemoveAssignment(a)}
-                            className="shrink-0 text-xs font-semibold text-rose-500 hover:underline"
-                          >
-                            Remove
-                          </button>
+                          <div className="flex shrink-0 items-center gap-3">
+                            {a.user_id ? (
+                              <label className="flex items-center gap-1 text-xs text-slate-500">
+                                Alloc:
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max="100"
+                                  defaultValue={a.allocation_percent ?? ""}
+                                  onBlur={(e) => {
+                                    if (e.target.value !== String(a.allocation_percent ?? "")) {
+                                      handleUpdateAssignmentAllocation(a, e.target.value);
+                                    }
+                                  }}
+                                  placeholder="—"
+                                  className="w-14 rounded-lg border border-slate-300 px-1.5 py-1 text-xs outline-none focus:border-slate-900"
+                                />
+                                %
+                              </label>
+                            ) : null}
+                            <button
+                              onClick={() => handleRemoveAssignment(a)}
+                              className="text-xs font-semibold text-rose-500 hover:underline"
+                            >
+                              Remove
+                            </button>
+                          </div>
                         </div>
                       ))
                     )}
@@ -870,6 +911,18 @@ export default function ProjectsPage() {
                       placeholder="Role on engagement (optional)"
                       className="w-full rounded-lg border border-slate-300 px-2 py-2 text-xs outline-none focus:border-slate-900"
                     />
+                    {assignmentForm.target_type === "user" ? (
+                      <input
+                        name="allocation_percent"
+                        type="number"
+                        min="1"
+                        max="100"
+                        value={assignmentForm.allocation_percent}
+                        onChange={handleAssignmentFormChange}
+                        placeholder="Allocation % of their time (optional)"
+                        className="w-full rounded-lg border border-slate-300 px-2 py-2 text-xs outline-none focus:border-slate-900"
+                      />
+                    ) : null}
                     <button
                       type="submit"
                       disabled={assigningTeam || !assignmentForm.target_id}

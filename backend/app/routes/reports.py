@@ -18,8 +18,10 @@ from app.models.contract import Contract
 from app.models.file_record import FileRecord
 from app.models.milestone import Milestone
 from app.models.project import Project
+from app.models.project_assignment import ProjectAssignment
 from app.models.task import Task
 from app.models.time_entry import TimeEntry
+from app.models.user import User
 from app.schemas.user import UserPublic
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
@@ -452,4 +454,79 @@ def compliance_dashboard(
             }
             for log in recent_changes
         ],
+    }
+
+
+@router.get("/dashboard/capacity")
+def capacity_dashboard(
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    """Firm-wide staffing capacity: for every active staff member, how
+    much of their time is committed across open engagements right now.
+    Only individual (user_id) assignments carry an allocation_percent --
+    department-wide assignments staff the whole team without a per-person
+    split, so they're surfaced separately rather than folded into the
+    percentage math."""
+    open_statuses = ("planning", "active", "on_hold")
+
+    users = db.query(User).filter(User.disabled.is_(False)).order_by(User.name).all()
+
+    assignments = (
+        db.query(ProjectAssignment, Project)
+        .join(Project, ProjectAssignment.project_id == Project.id)
+        .filter(
+            ProjectAssignment.user_id.isnot(None),
+            Project.deleted_at.is_(None),
+            Project.status.in_(open_statuses),
+        )
+        .all()
+    )
+
+    by_user: dict[int, list[dict]] = {}
+    for assignment, project in assignments:
+        by_user.setdefault(assignment.user_id, []).append(
+            {
+                "project_id": project.id,
+                "project_name": project.name,
+                "role": assignment.role,
+                "allocation_percent": assignment.allocation_percent,
+            }
+        )
+
+    people = []
+    for user in users:
+        engagements = by_user.get(user.id, [])
+        total_allocated = sum(e["allocation_percent"] or 0 for e in engagements)
+        unspecified_count = sum(1 for e in engagements if e["allocation_percent"] is None)
+
+        if not engagements:
+            status_label = "bench"
+        elif total_allocated > 100:
+            status_label = "over_allocated"
+        elif total_allocated < 50:
+            status_label = "under_allocated"
+        else:
+            status_label = "fully_allocated"
+
+        people.append(
+            {
+                "id": user.id,
+                "name": user.name,
+                "email": user.email,
+                "position": user.position,
+                "department_id": user.department_id,
+                "total_allocated_percent": total_allocated,
+                "unspecified_allocation_count": unspecified_count,
+                "status": status_label,
+                "engagements": engagements,
+            }
+        )
+
+    return {
+        "generated_at": utcnow(),
+        "over_allocated_count": sum(1 for p in people if p["status"] == "over_allocated"),
+        "under_allocated_count": sum(1 for p in people if p["status"] == "under_allocated"),
+        "bench_count": sum(1 for p in people if p["status"] == "bench"),
+        "people": people,
     }
