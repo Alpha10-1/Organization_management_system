@@ -6,6 +6,10 @@ import {
   ShieldCheck,
   ListChecks,
   Briefcase,
+  Building2,
+  Award,
+  CalendarClock,
+  Repeat,
 } from "lucide-react";
 
 export const navItems = [
@@ -31,6 +35,30 @@ export const navItems = [
     label: "Tasks",
     href: "/dashboard/tasks",
     icon: ListChecks,
+    roles: ["admin", "staff"],
+  },
+  {
+    label: "Departments",
+    href: "/dashboard/departments",
+    icon: Building2,
+    roles: ["admin", "staff"],
+  },
+  {
+    label: "Skills",
+    href: "/dashboard/skills",
+    icon: Award,
+    roles: ["admin", "staff"],
+  },
+  {
+    label: "Leave",
+    href: "/dashboard/leave",
+    icon: CalendarClock,
+    roles: ["admin", "staff"],
+  },
+  {
+    label: "Resource Requests",
+    href: "/dashboard/resource-requests",
+    icon: Repeat,
     roles: ["admin", "staff"],
   },
   {

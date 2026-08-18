@@ -486,6 +486,7 @@ export function fetchTasks(params = {}) {
   const searchParams = new URLSearchParams();
   if (params.status) searchParams.append("status", params.status);
   if (params.client_id) searchParams.append("client_id", params.client_id);
+  if (params.project_id) searchParams.append("project_id", params.project_id);
   if (params.assigned_to_me) searchParams.append("assigned_to_me", "true");
   if (params.overdue_only) searchParams.append("overdue_only", "true");
   const qs = searchParams.toString();
@@ -687,7 +688,14 @@ export const signoffMilestone = (id, payload) => apiSend(`/milestones/${id}/sign
 
 // --- Task templates ------------------------------------------------------------------
 
-export const fetchTaskTemplates = () => apiGet("/task-templates/");
+export function fetchTaskTemplates(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.engagement_type) searchParams.append("engagement_type", params.engagement_type);
+  if (params.trigger_event) searchParams.append("trigger_event", params.trigger_event);
+  if (params.department_id) searchParams.append("department_id", params.department_id);
+  const qs = searchParams.toString();
+  return apiGet(`/task-templates/${qs ? `?${qs}` : ""}`);
+}
 export const createTaskTemplate = (payload) => apiSend("/task-templates/", "POST", payload);
 export const updateTaskTemplate = (id, payload) => apiSend(`/task-templates/${id}`, "PUT", payload);
 export const deleteTaskTemplate = (id) => apiDelete(`/task-templates/${id}`);

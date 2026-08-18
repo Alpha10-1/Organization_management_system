@@ -30,6 +30,16 @@ import {
   updateProjectAssignment,
   deleteProjectAssignment,
   fetchProjectHistory,
+  fetchProjectBudgetBurn,
+  fetchProjectHealth,
+  cloneProject,
+  fetchChangeOrders,
+  createChangeOrder,
+  approveChangeOrder,
+  rejectChangeOrder,
+  deleteChangeOrder,
+  signoffMilestone,
+  fetchTasks,
 } from "@/lib/api";
 
 const initialAssignmentForm = { target_type: "user", target_id: "", role: "", allocation_percent: "" };
@@ -53,6 +63,34 @@ const RISK_STYLES = {
   high: "bg-rose-100 text-rose-700",
 };
 
+const HEALTH_STYLES = {
+  green: "bg-emerald-100 text-emerald-700",
+  amber: "bg-amber-100 text-amber-700",
+  red: "bg-rose-100 text-rose-700",
+};
+
+const BUDGET_STATUS_STYLES = {
+  on_track: "bg-emerald-500",
+  at_risk: "bg-amber-500",
+  over_budget: "bg-rose-500",
+  hours_only: "bg-slate-400",
+  no_budget: "bg-slate-300",
+};
+
+const CHANGE_ORDER_TYPES = ["scope_change", "fee_adjustment", "timeline_extension", "other"];
+
+const CHANGE_ORDER_STATUS_STYLES = {
+  pending: "bg-amber-100 text-amber-700",
+  approved: "bg-emerald-100 text-emerald-700",
+  rejected: "bg-rose-100 text-rose-700",
+};
+
+const APPROVAL_STATUS_STYLES = {
+  pending: "bg-slate-100 text-slate-600",
+  approved: "bg-emerald-100 text-emerald-700",
+  rejected: "bg-rose-100 text-rose-700",
+};
+
 const initialProjectForm = {
   name: "",
   client_id: "",
@@ -70,6 +108,7 @@ const initialProjectForm = {
   deliverables: "",
   stakeholders: "",
   billing_notes: "",
+  close_out_notes: "",
 };
 
 const initialMilestoneForm = { name: "", description: "", due_date: "", status: "pending" };
@@ -86,6 +125,25 @@ const initialContractForm = {
 };
 
 const initialTimeForm = { hours: "", entry_date: "", billable: true, notes: "" };
+
+const initialChangeOrderForm = {
+  contract_id: "",
+  title: "",
+  description: "",
+  change_type: "scope_change",
+  amount_delta: "",
+  hours_delta: "",
+  requested_date: "",
+};
+
+const initialCloneForm = {
+  name: "",
+  start_date: "",
+  end_date: "",
+  include_team: true,
+  include_milestones: true,
+  include_tasks: false,
+};
 
 function formatMoney(value) {
   if (value === null || value === undefined || value === "") return "—";
@@ -154,6 +212,18 @@ export default function ProjectsPage() {
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
+  const [budgetBurn, setBudgetBurn] = useState(null);
+  const [health, setHealth] = useState(null);
+  const [projectTasks, setProjectTasks] = useState([]);
+
+  const [changeOrders, setChangeOrders] = useState([]);
+  const [showChangeOrderModal, setShowChangeOrderModal] = useState(false);
+  const [changeOrderForm, setChangeOrderForm] = useState(initialChangeOrderForm);
+
+  const [showCloneModal, setShowCloneModal] = useState(false);
+  const [cloneForm, setCloneForm] = useState(initialCloneForm);
+  const [cloning, setCloning] = useState(false);
+
   async function loadProjects() {
     try {
       setLoading(true);
@@ -192,13 +262,17 @@ export default function ProjectsPage() {
     setActiveTab("overview");
     setHistoryLoading(true);
     try {
-      const [ms, cs, te, util, as, hist] = await Promise.all([
+      const [ms, cs, te, util, as, hist, burn, hp, cos, tks] = await Promise.all([
         fetchMilestones({ project_id: project.id }),
         fetchContracts({ project_id: project.id }),
         fetchTimeEntries({ project_id: project.id }),
         fetchProjectUtilization(project.id).catch(() => null),
         fetchProjectAssignments(project.id).catch(() => []),
         fetchProjectHistory(project.id).catch(() => []),
+        fetchProjectBudgetBurn(project.id).catch(() => null),
+        fetchProjectHealth(project.id).catch(() => null),
+        fetchChangeOrders({ project_id: project.id }).catch(() => []),
+        fetchTasks({ project_id: project.id }).catch(() => []),
       ]);
       setMilestones(ms);
       setContracts(cs);
@@ -206,6 +280,10 @@ export default function ProjectsPage() {
       setUtilization(util);
       setAssignments(as);
       setHistory(hist);
+      setBudgetBurn(burn);
+      setHealth(hp);
+      setChangeOrders(cos);
+      setProjectTasks(tks);
 
       const margins = {};
       await Promise.all(
@@ -262,9 +340,10 @@ export default function ProjectsPage() {
       deliverables: project.deliverables || "",
       stakeholders: project.stakeholders || "",
       billing_notes: project.billing_notes || "",
+      close_out_notes: project.close_out_notes || "",
     });
     setShowMoreProjectDetail(
-      Boolean(project.objectives || project.deliverables || project.stakeholders || project.billing_notes)
+      Boolean(project.objectives || project.deliverables || project.stakeholders || project.billing_notes || project.close_out_notes)
     );
     setShowProjectModal(true);
   }
@@ -296,6 +375,7 @@ export default function ProjectsPage() {
         deliverables: projectForm.deliverables || undefined,
         stakeholders: projectForm.stakeholders || undefined,
         billing_notes: projectForm.billing_notes || undefined,
+        close_out_notes: projectForm.close_out_notes || undefined,
       };
       if (editingProject) {
         await updateProject(editingProject.id, payload);
@@ -428,6 +508,123 @@ export default function ProjectsPage() {
     }
   }
 
+  async function handleMilestoneSignoff(milestone, status) {
+    try {
+      setError("");
+      let reason;
+      if (status === "rejected") {
+        reason = window.prompt("Reason for rejecting sign-off (optional):") || undefined;
+      }
+      await signoffMilestone(milestone.id, { status, reason });
+      await refreshDetail();
+    } catch (err) {
+      setError(err.message || "Failed to update sign-off status");
+    }
+  }
+
+  // --- Change orders --------------------------------------------------------------
+
+  function openChangeOrderModal() {
+    const defaultContract = contracts[0];
+    setChangeOrderForm({
+      ...initialChangeOrderForm,
+      contract_id: defaultContract ? String(defaultContract.id) : "",
+    });
+    setShowChangeOrderModal(true);
+  }
+
+  async function handleCreateChangeOrder(e) {
+    e.preventDefault();
+    if (!changeOrderForm.contract_id) return;
+    try {
+      setSaving(true);
+      setError("");
+      await createChangeOrder({
+        contract_id: Number(changeOrderForm.contract_id),
+        title: changeOrderForm.title,
+        description: changeOrderForm.description || undefined,
+        change_type: changeOrderForm.change_type,
+        amount_delta: changeOrderForm.amount_delta !== "" ? Number(changeOrderForm.amount_delta) : undefined,
+        hours_delta: changeOrderForm.hours_delta !== "" ? Number(changeOrderForm.hours_delta) : undefined,
+        requested_date: changeOrderForm.requested_date || undefined,
+      });
+      setChangeOrderForm(initialChangeOrderForm);
+      setShowChangeOrderModal(false);
+      await refreshDetail();
+    } catch (err) {
+      setError(err.message || "Failed to create change order");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleApproveChangeOrder(co) {
+    try {
+      setError("");
+      await approveChangeOrder(co.id);
+      await refreshDetail();
+    } catch (err) {
+      setError(err.message || "Failed to approve change order");
+    }
+  }
+
+  async function handleRejectChangeOrder(co) {
+    try {
+      setError("");
+      const reason = window.prompt("Reason for rejecting (optional):") || undefined;
+      await rejectChangeOrder(co.id, { reason });
+      await refreshDetail();
+    } catch (err) {
+      setError(err.message || "Failed to reject change order");
+    }
+  }
+
+  async function handleDeleteChangeOrder(co) {
+    try {
+      setError("");
+      await deleteChangeOrder(co.id);
+      await refreshDetail();
+    } catch (err) {
+      setError(err.message || "Failed to delete change order");
+    }
+  }
+
+  // --- Clone engagement -------------------------------------------------------------
+
+  function openCloneModal() {
+    if (!selectedProject) return;
+    setCloneForm({
+      ...initialCloneForm,
+      name: `${selectedProject.name} (Copy)`,
+    });
+    setShowCloneModal(true);
+  }
+
+  async function handleCloneProject(e) {
+    e.preventDefault();
+    if (!selectedProject) return;
+    try {
+      setCloning(true);
+      setError("");
+      const result = await cloneProject(selectedProject.id, {
+        name: cloneForm.name || undefined,
+        start_date: cloneForm.start_date ? new Date(cloneForm.start_date).toISOString() : undefined,
+        end_date: cloneForm.end_date ? new Date(cloneForm.end_date).toISOString() : undefined,
+        include_team: cloneForm.include_team,
+        include_milestones: cloneForm.include_milestones,
+        include_tasks: cloneForm.include_tasks,
+      });
+      setShowCloneModal(false);
+      setCloneForm(initialCloneForm);
+      await loadProjects();
+      if (result?.project) await loadProjectDetail(result.project);
+    } catch (err) {
+      setError(err.message || "Failed to clone engagement");
+    } finally {
+      setCloning(false);
+    }
+  }
+
   // --- Contracts ----------------------------------------------------------------
 
   async function handleCreateContract(e) {
@@ -536,13 +733,15 @@ export default function ProjectsPage() {
     () => [
       { id: "overview", label: "Overview" },
       { id: "team", label: `Team (${assignments.length})` },
+      { id: "timeline", label: "Timeline" },
       { id: "milestones", label: `Milestones (${milestones.length})` },
       { id: "contracts", label: `Contracts (${contracts.length})` },
+      { id: "changeOrders", label: `Change Orders (${changeOrders.length})` },
       { id: "time", label: `Time (${timeEntries.length})` },
       { id: "template", label: "Apply Template" },
       { id: "history", label: "History" },
     ],
-    [assignments.length, milestones.length, contracts.length, timeEntries.length]
+    [assignments.length, milestones.length, contracts.length, timeEntries.length, changeOrders.length]
   );
 
   return (
@@ -725,6 +924,22 @@ export default function ProjectsPage() {
                   <h2 className="text-lg font-semibold text-slate-900">{selectedProject.name}</h2>
                   <p className="text-sm text-slate-500">{clientLabel(selectedProject.client_id)}</p>
                 </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {health ? (
+                    <span
+                      title={health.reasons?.join("; ")}
+                      className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${HEALTH_STYLES[health.health] || HEALTH_STYLES.green}`}
+                    >
+                      {health.health}
+                    </span>
+                  ) : null}
+                  <button
+                    onClick={openCloneModal}
+                    className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                  >
+                    Clone Engagement
+                  </button>
+                </div>
               </div>
 
               <div className="mt-4 flex flex-wrap gap-2 border-b border-slate-200 pb-3">
@@ -745,6 +960,42 @@ export default function ProjectsPage() {
 
               {activeTab === "overview" ? (
                 <div className="mt-4 space-y-3">
+                  {budgetBurn ? (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="flex items-center justify-between text-xs">
+                        <p className="font-semibold uppercase tracking-wide text-slate-400">
+                          Budget Burn
+                        </p>
+                        <p
+                          className={`rounded-full px-2 py-0.5 font-semibold capitalize ${
+                            budgetBurn.alert ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"
+                          }`}
+                        >
+                          {budgetBurn.status.replace("_", " ")}
+                        </p>
+                      </div>
+                      {budgetBurn.percent_consumed !== null && budgetBurn.percent_consumed !== undefined ? (
+                        <>
+                          <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200">
+                            <div
+                              className={`h-2 rounded-full ${BUDGET_STATUS_STYLES[budgetBurn.status] || BUDGET_STATUS_STYLES.on_track}`}
+                              style={{ width: `${Math.min(100, budgetBurn.percent_consumed)}%` }}
+                            />
+                          </div>
+                          <p className="mt-1 text-xs text-slate-600">
+                            {budgetBurn.percent_consumed.toFixed(1)}% of budget consumed
+                            {budgetBurn.cost_to_date !== null ? ` (${formatMoney(budgetBurn.cost_to_date)} to date)` : ""}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="mt-1 text-xs text-slate-500">
+                          {budgetBurn.status === "no_budget"
+                            ? "No budget set on this engagement."
+                            : "Logged hours don't yet have an hourly rate to translate into cost."}
+                        </p>
+                      )}
+                    </div>
+                  ) : null}
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Budget</p>
@@ -818,6 +1069,119 @@ export default function ProjectsPage() {
                       ) : null}
                     </div>
                   ) : null}
+                  {selectedProject.status === "completed" || selectedProject.close_out_notes ? (
+                    <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-blue-500">
+                        Close-out Notes
+                      </p>
+                      <p className="mt-1 whitespace-pre-wrap text-sm text-slate-800">
+                        {selectedProject.close_out_notes || "No retrospective notes recorded yet — add them via Edit."}
+                      </p>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {activeTab === "timeline" ? (
+                <div className="mt-4 space-y-4">
+                  {(() => {
+                    const startMs = selectedProject.start_date ? new Date(selectedProject.start_date).getTime() : null;
+                    const endMs = selectedProject.end_date ? new Date(selectedProject.end_date).getTime() : null;
+                    if (!startMs || !endMs || endMs <= startMs) {
+                      return (
+                        <p className="text-sm text-slate-400">
+                          Set a start and end date on this engagement to see a timeline.
+                        </p>
+                      );
+                    }
+                    const span = endMs - startMs;
+                    const pct = (ms) => Math.min(100, Math.max(0, ((ms - startMs) / span) * 100));
+                    const todayPct = pct(Date.now());
+                    const rows = [
+                      ...milestones.map((m) => ({
+                        kind: "milestone",
+                        key: `m-${m.id}`,
+                        label: m.name,
+                        status: m.status,
+                        at: m.due_date ? new Date(m.due_date).getTime() : null,
+                      })),
+                      ...projectTasks.map((t) => ({
+                        kind: "task",
+                        key: `t-${t.id}`,
+                        label: t.title,
+                        status: t.status,
+                        startAt: t.created_at ? new Date(t.created_at).getTime() : startMs,
+                        at: t.due_date ? new Date(t.due_date).getTime() : null,
+                      })),
+                    ].filter((r) => r.at !== null);
+
+                    return (
+                      <div className="space-y-2">
+                        <div className="relative h-8 rounded-xl bg-slate-100">
+                          <div className="absolute inset-y-0 left-0 flex items-center pl-2 text-[10px] font-semibold text-slate-400">
+                            {formatDate(selectedProject.start_date)}
+                          </div>
+                          <div className="absolute inset-y-0 right-0 flex items-center pr-2 text-[10px] font-semibold text-slate-400">
+                            {formatDate(selectedProject.end_date)}
+                          </div>
+                          {todayPct >= 0 && todayPct <= 100 ? (
+                            <div
+                              className="absolute inset-y-0 w-0.5 bg-slate-900"
+                              style={{ left: `${todayPct}%` }}
+                              title="Today"
+                            />
+                          ) : null}
+                        </div>
+                        <div className="max-h-80 space-y-1.5 overflow-y-auto">
+                          {rows.length === 0 ? (
+                            <p className="text-sm text-slate-400">
+                              No dated milestones or tasks to plot on the timeline yet.
+                            </p>
+                          ) : (
+                            rows
+                              .sort((a, b) => a.at - b.at)
+                              .map((r) => (
+                                <div key={r.key} className="flex items-center gap-2">
+                                  <span
+                                    className={`w-24 shrink-0 truncate text-xs ${r.kind === "milestone" ? "font-semibold text-slate-700" : "text-slate-500"}`}
+                                    title={r.label}
+                                  >
+                                    {r.label}
+                                  </span>
+                                  <div className="relative h-4 flex-1 rounded-full bg-slate-50">
+                                    {r.kind === "task" ? (
+                                      <div
+                                        className={`absolute inset-y-0 rounded-full ${r.status === "done" ? "bg-emerald-300" : "bg-blue-300"}`}
+                                        style={{
+                                          left: `${pct(Math.min(r.startAt, r.at))}%`,
+                                          width: `${Math.max(1.5, pct(r.at) - pct(Math.min(r.startAt, r.at)))}%`,
+                                        }}
+                                        title={`${r.label} — due ${formatDate(r.at)}`}
+                                      />
+                                    ) : (
+                                      <div
+                                        className={`absolute top-1/2 h-3 w-3 -translate-y-1/2 rotate-45 ${
+                                          r.status === "achieved"
+                                            ? "bg-emerald-500"
+                                            : r.status === "missed"
+                                            ? "bg-rose-500"
+                                            : "bg-slate-400"
+                                        }`}
+                                        style={{ left: `calc(${pct(r.at)}% - 6px)` }}
+                                        title={`${r.label} — due ${formatDate(r.at)}`}
+                                      />
+                                    )}
+                                  </div>
+                                </div>
+                              ))
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          Diamonds are milestones; bars are tasks (created date → due date). Vertical line marks today.
+                        </p>
+                      </div>
+                    );
+                  })()}
                 </div>
               ) : null}
 
@@ -960,15 +1324,49 @@ export default function ProjectsPage() {
                               Delete
                             </button>
                           </div>
-                          <select
-                            value={m.status}
-                            onChange={(e) => handleMilestoneStatus(m, e.target.value)}
-                            className="mt-2 rounded-lg border border-slate-300 px-2 py-1 text-xs outline-none focus:border-slate-900"
-                          >
-                            <option value="pending">Pending</option>
-                            <option value="achieved">Achieved</option>
-                            <option value="missed">Missed</option>
-                          </select>
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <select
+                              value={m.status}
+                              onChange={(e) => handleMilestoneStatus(m, e.target.value)}
+                              className="rounded-lg border border-slate-300 px-2 py-1 text-xs outline-none focus:border-slate-900"
+                            >
+                              <option value="pending">Pending</option>
+                              <option value="achieved">Achieved</option>
+                              <option value="missed">Missed</option>
+                            </select>
+                            <span
+                              className={`rounded-full px-2 py-1 text-[10px] font-semibold capitalize ${APPROVAL_STATUS_STYLES[m.approval_status] || APPROVAL_STATUS_STYLES.pending}`}
+                            >
+                              Client sign-off: {m.approval_status || "pending"}
+                            </span>
+                          </div>
+                          {m.approval_status === "rejected" && m.rejection_reason ? (
+                            <p className="mt-1 text-xs text-rose-600">Reason: {m.rejection_reason}</p>
+                          ) : null}
+                          <div className="mt-2 flex gap-2">
+                            <button
+                              onClick={() => handleMilestoneSignoff(m, "approved")}
+                              disabled={m.approval_status === "approved"}
+                              className="text-xs font-semibold text-emerald-600 hover:underline disabled:opacity-40"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              onClick={() => handleMilestoneSignoff(m, "rejected")}
+                              disabled={m.approval_status === "rejected"}
+                              className="text-xs font-semibold text-rose-600 hover:underline disabled:opacity-40"
+                            >
+                              Reject
+                            </button>
+                            {m.approval_status && m.approval_status !== "pending" ? (
+                              <button
+                                onClick={() => handleMilestoneSignoff(m, "pending")}
+                                className="text-xs font-semibold text-slate-500 hover:underline"
+                              >
+                                Reset
+                              </button>
+                            ) : null}
+                          </div>
                         </div>
                       ))
                     )}
@@ -1027,6 +1425,84 @@ export default function ProjectsPage() {
                           </div>
                         );
                       })
+                    )}
+                  </div>
+                </div>
+              ) : null}
+
+              {activeTab === "changeOrders" ? (
+                <div className="mt-4 space-y-3">
+                  {contracts.length === 0 ? (
+                    <p className="text-sm text-slate-400">
+                      Add a contract first — change orders are scoped to a contract.
+                    </p>
+                  ) : (
+                    <button
+                      onClick={openChangeOrderModal}
+                      className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                    >
+                      + Add Change Order
+                    </button>
+                  )}
+                  <div className="max-h-72 space-y-2 overflow-y-auto">
+                    {changeOrders.length === 0 ? (
+                      <p className="text-sm text-slate-400">No change orders yet.</p>
+                    ) : (
+                      changeOrders.map((co) => (
+                        <div key={co.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="text-sm font-medium text-slate-800">{co.title}</p>
+                              <p className="text-xs capitalize text-slate-500">
+                                {co.change_type.replace("_", " ")}
+                                {co.requested_date ? ` · requested ${formatDate(co.requested_date)}` : ""}
+                              </p>
+                            </div>
+                            <span
+                              className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold capitalize ${CHANGE_ORDER_STATUS_STYLES[co.status] || CHANGE_ORDER_STATUS_STYLES.pending}`}
+                            >
+                              {co.status}
+                            </span>
+                          </div>
+                          {co.description ? (
+                            <p className="mt-1 text-xs text-slate-600">{co.description}</p>
+                          ) : null}
+                          <p className="mt-1 text-xs text-slate-700">
+                            {co.amount_delta !== null && co.amount_delta !== undefined
+                              ? `${Number(co.amount_delta) >= 0 ? "+" : ""}${formatMoney(co.amount_delta)}`
+                              : ""}
+                            {co.hours_delta !== null && co.hours_delta !== undefined
+                              ? ` · ${Number(co.hours_delta) >= 0 ? "+" : ""}${co.hours_delta}h`
+                              : ""}
+                          </p>
+                          {co.status === "pending" ? (
+                            <div className="mt-2 flex gap-3">
+                              <button
+                                onClick={() => handleApproveChangeOrder(co)}
+                                className="text-xs font-semibold text-emerald-600 hover:underline"
+                              >
+                                Approve
+                              </button>
+                              <button
+                                onClick={() => handleRejectChangeOrder(co)}
+                                className="text-xs font-semibold text-rose-600 hover:underline"
+                              >
+                                Reject
+                              </button>
+                              <button
+                                onClick={() => handleDeleteChangeOrder(co)}
+                                className="text-xs font-semibold text-slate-500 hover:underline"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          ) : (
+                            <p className="mt-2 text-[11px] text-slate-400">
+                              Decided by {co.decided_by_name || co.decided_by_email || "—"} on {formatDate(co.decided_at)}
+                            </p>
+                          )}
+                        </div>
+                      ))
                     )}
                   </div>
                 </div>
@@ -1403,6 +1879,17 @@ export default function ProjectsPage() {
                       className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
                     />
                   </div>
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700">Close-out Notes</label>
+                    <textarea
+                      name="close_out_notes"
+                      value={projectForm.close_out_notes}
+                      onChange={handleProjectFormChange}
+                      rows={3}
+                      placeholder="Retrospective — what went well, what to change next time"
+                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                    />
+                  </div>
                 </div>
               ) : null}
 
@@ -1641,6 +2128,201 @@ export default function ProjectsPage() {
                   className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-70"
                 >
                   {saving ? "Saving..." : "Log Time"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {showChangeOrderModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <h2 className="text-xl font-bold text-slate-900">Add Change Order</h2>
+              <button
+                onClick={() => setShowChangeOrderModal(false)}
+                className="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-600 hover:bg-slate-100"
+              >
+                Close
+              </button>
+            </div>
+            <form onSubmit={handleCreateChangeOrder} className="space-y-4">
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-700">Contract</label>
+                <select
+                  value={changeOrderForm.contract_id}
+                  onChange={(e) => setChangeOrderForm((p) => ({ ...p, contract_id: e.target.value }))}
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                  required
+                >
+                  <option value="" disabled>
+                    Select a contract
+                  </option>
+                  {contracts.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name || `Contract #${c.id}`} — {formatMoney(c.value)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <input
+                type="text"
+                placeholder="Title"
+                value={changeOrderForm.title}
+                onChange={(e) => setChangeOrderForm((p) => ({ ...p, title: e.target.value }))}
+                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                required
+              />
+              <textarea
+                placeholder="Description (optional)"
+                value={changeOrderForm.description}
+                onChange={(e) => setChangeOrderForm((p) => ({ ...p, description: e.target.value }))}
+                rows={2}
+                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+              />
+              <select
+                value={changeOrderForm.change_type}
+                onChange={(e) => setChangeOrderForm((p) => ({ ...p, change_type: e.target.value }))}
+                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+              >
+                {CHANGE_ORDER_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {t.replace("_", " ")}
+                  </option>
+                ))}
+              </select>
+              <div className="grid grid-cols-2 gap-3">
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="Amount delta ($)"
+                  value={changeOrderForm.amount_delta}
+                  onChange={(e) => setChangeOrderForm((p) => ({ ...p, amount_delta: e.target.value }))}
+                  className="rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                />
+                <input
+                  type="number"
+                  step="0.25"
+                  placeholder="Hours delta"
+                  value={changeOrderForm.hours_delta}
+                  onChange={(e) => setChangeOrderForm((p) => ({ ...p, hours_delta: e.target.value }))}
+                  className="rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-700">Requested Date</label>
+                <input
+                  type="date"
+                  value={changeOrderForm.requested_date}
+                  onChange={(e) => setChangeOrderForm((p) => ({ ...p, requested_date: e.target.value }))}
+                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                />
+              </div>
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowChangeOrderModal(false)}
+                  className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-70"
+                >
+                  {saving ? "Saving..." : "Add Change Order"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {showCloneModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <h2 className="text-xl font-bold text-slate-900">Clone Engagement</h2>
+              <button
+                onClick={() => setShowCloneModal(false)}
+                className="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-600 hover:bg-slate-100"
+              >
+                Close
+              </button>
+            </div>
+            <p className="mb-4 text-xs text-slate-500">
+              Useful for recurring work like an annual audit — copies the engagement setup with new dates.
+            </p>
+            <form onSubmit={handleCloneProject} className="space-y-4">
+              <input
+                type="text"
+                placeholder="New engagement name"
+                value={cloneForm.name}
+                onChange={(e) => setCloneForm((p) => ({ ...p, name: e.target.value }))}
+                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+              />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">Start Date</label>
+                  <input
+                    type="date"
+                    value={cloneForm.start_date}
+                    onChange={(e) => setCloneForm((p) => ({ ...p, start_date: e.target.value }))}
+                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">End Date</label>
+                  <input
+                    type="date"
+                    value={cloneForm.end_date}
+                    onChange={(e) => setCloneForm((p) => ({ ...p, end_date: e.target.value }))}
+                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={cloneForm.include_team}
+                    onChange={(e) => setCloneForm((p) => ({ ...p, include_team: e.target.checked }))}
+                  />
+                  Copy team assignments
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={cloneForm.include_milestones}
+                    onChange={(e) => setCloneForm((p) => ({ ...p, include_milestones: e.target.checked }))}
+                  />
+                  Copy milestones
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={cloneForm.include_tasks}
+                    onChange={(e) => setCloneForm((p) => ({ ...p, include_tasks: e.target.checked }))}
+                  />
+                  Copy open tasks
+                </label>
+              </div>
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowCloneModal(false)}
+                  className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={cloning}
+                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-70"
+                >
+                  {cloning ? "Cloning..." : "Clone Engagement"}
                 </button>
               </div>
             </form>
