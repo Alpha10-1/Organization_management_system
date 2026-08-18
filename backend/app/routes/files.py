@@ -1,5 +1,6 @@
 import io
 import os
+import tempfile
 import uuid
 import zipfile
 from pathlib import Path
@@ -23,6 +24,7 @@ from sqlalchemy.orm import Session
 from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user
 from app.core.file_access import can_delete_file, can_view_file
+from app.core.storage import get_storage_backend
 from app.core.time import utcnow
 from app.db.session import get_db
 from app.models.client import Client
@@ -37,12 +39,13 @@ router = APIRouter(prefix="/files", tags=["Files"])
 class BulkFileIds(BaseModel):
     file_ids: list[int]
 
-# Resolve relative to the backend package (not the process's cwd) so
-# uploads land in the same place regardless of where uvicorn is launched
-# from. Override with UPLOAD_DIR to point at a different volume/mount.
-_BACKEND_ROOT = Path(__file__).resolve().parents[2]
-UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", str(_BACKEND_ROOT / "uploads")))
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# Storage is pluggable -- local disk by default, S3-compatible when
+# STORAGE_BACKEND=s3 is set (see app.core.storage). Every route below talks
+# to `storage` through the small StorageBackend interface and a
+# backend-agnostic key (record.stored_name), never a raw filesystem path,
+# so this file doesn't change when the backend does.
+storage = get_storage_backend()
 
 DEFAULT_PAGE_LIMIT = 100
 MAX_PAGE_LIMIT = 200
@@ -178,11 +181,16 @@ async def upload_file(
             raise HTTPException(status_code=404, detail="Project not found")
 
     stored_name = f"{uuid.uuid4().hex}{extension}"
-    file_path = UPLOAD_DIR / stored_name
 
+    # Buffer to a spooled tempfile (spills to disk past a few MB) rather
+    # than writing straight to the final destination. This keeps memory
+    # bounded for large uploads while letting us validate the size limit
+    # *before* anything is persisted to the storage backend -- important
+    # now that "storage" might be a network call (S3), where we don't want
+    # to upload-then-delete a rejected file.
     total_size = 0
     try:
-        with file_path.open("wb") as buffer:
+        with tempfile.SpooledTemporaryFile(max_size=4 * 1024 * 1024) as buffer:
             while chunk := await file.read(UPLOAD_CHUNK_SIZE):
                 total_size += len(chunk)
                 if total_size > MAX_UPLOAD_SIZE_BYTES:
@@ -194,18 +202,23 @@ async def upload_file(
                         ),
                     )
                 buffer.write(chunk)
-    except HTTPException:
-        file_path.unlink(missing_ok=True)
-        raise
+
+            storage.save(stored_name, buffer)
     finally:
         await file.close()
 
-    file_size = file_path.stat().st_size
+    file_size = total_size
 
     record = FileRecord(
         original_name=file.filename,
         stored_name=stored_name,
-        file_path=str(file_path),
+        # Backend-agnostic storage key. Historically this held an absolute
+        # local filesystem path; it's kept as a column (rather than reusing
+        # stored_name) for backward-compat with any tooling/reports that
+        # read it, but nothing in this file treats it as a filesystem path
+        # anymore -- `storage` resolves stored_name against whichever
+        # backend is configured.
+        file_path=stored_name,
         file_type=file.content_type,
         file_size=file_size,
         client_id=client_id,
@@ -283,7 +296,7 @@ def download_file(
     if not can_view_file(current_user, record):
         raise HTTPException(status_code=403, detail="You do not have access to this file")
 
-    if not os.path.exists(record.file_path):
+    if not storage.exists(record.stored_name):
         raise HTTPException(status_code=404, detail="Stored file missing")
 
     log_activity(
@@ -296,10 +309,23 @@ def download_file(
         description=f"Downloaded file '{record.original_name}'",
     )
 
-    return FileResponse(
-        path=record.file_path,
-        filename=record.original_name,
+    local_path = storage.local_path(record.stored_name)
+    if local_path is not None:
+        # Local backend: stream straight from disk.
+        return FileResponse(
+            path=local_path,
+            filename=record.original_name,
+            media_type=record.file_type or "application/octet-stream",
+        )
+
+    # Backends without a local path (S3): pull the bytes and stream them
+    # back through our API rather than redirecting, so download permissions
+    # stay enforced by can_view_file() above instead of a shareable URL.
+    data = storage.read_bytes(record.stored_name)
+    return StreamingResponse(
+        io.BytesIO(data),
         media_type=record.file_type or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{record.original_name}"'},
     )
 
 
@@ -437,7 +463,7 @@ def bulk_download_files(
 
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
         for record in visible:
-            if not os.path.exists(record.file_path):
+            if not storage.exists(record.stored_name):
                 continue
             name = record.original_name
             count = used_names.get(name, 0)
@@ -445,7 +471,7 @@ def bulk_download_files(
             if count:
                 stem, dot, ext = name.rpartition(".")
                 name = f"{stem} ({count}).{ext}" if dot else f"{name} ({count})"
-            zip_file.write(record.file_path, arcname=name)
+            zip_file.writestr(name, storage.read_bytes(record.stored_name))
 
     buffer.seek(0)
 

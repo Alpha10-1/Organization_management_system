@@ -28,7 +28,8 @@ This system helps organizations manage:
 
 ### File Management (Secure)
 - Upload files linked to clients
-- Secure file storage (local disk for development)
+- Pluggable storage backend: local disk by default, S3-compatible
+  (AWS S3, MinIO, R2, etc) via `STORAGE_BACKEND=s3` — see `.env.example`
 - JWT-protected file access
 - Authenticated file download
 - File preview for:
@@ -144,9 +145,10 @@ temporary one and warns you), but every restart invalidates existing logins.
 Setting `ENVIRONMENT=production` without a real `SECRET_KEY` will refuse to
 start at all.
 
-`CORS_ORIGINS`, `COOKIE_SECURE`, `UPLOAD_DIR`, and `DATABASE_URL` are also
-configurable — see the comments in `.env.example` for details. All default
-to sensible values for local development if left unset.
+`CORS_ORIGINS`, `COOKIE_SECURE`, `UPLOAD_DIR`, `STORAGE_BACKEND`, and
+`DATABASE_URL` are also configurable — see the comments in `.env.example`
+for details. All default to sensible values for local development if left
+unset.
 
 ### Apply database migrations
 
@@ -277,7 +279,6 @@ change takes effect.
 
 ## Current Limitations
 
-- Files are stored locally instead of cloud storage
 - No email verification or password reset flow yet
 - Login rate limiting is in-memory and per-process — fine for a single
   uvicorn worker, but needs a shared store (e.g. Redis) before running
@@ -287,7 +288,6 @@ change takes effect.
 
 ## Future Improvements
 
-- Cloud file storage (AWS S3 / Firebase)
 - Notifications system
 - Real-time updates (WebSockets)
 - Advanced reporting and exports
