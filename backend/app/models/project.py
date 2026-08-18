@@ -49,6 +49,19 @@ class Project(Base):
     risk_level = Column(String(20), nullable=False, default="low", index=True)  # low | medium | high
     compliance_flag = Column(String(50), nullable=True)  # free-text flag, e.g. "SOX", "PCAOB"
 
+    # Short retrospective captured when an engagement wraps up, so lessons
+    # learned aren't lost once the team moves on. Not required to move a
+    # project to "completed" -- just carried alongside it if provided.
+    close_out_notes = Column(Text, nullable=True)
+
+    # Recurring engagements (e.g. an annual audit) are created via the
+    # /projects/{id}/clone action rather than a stored recurrence rule --
+    # unlike tasks, engagements don't auto-regenerate on a timer, they're
+    # cloned deliberately when the next cycle is scoped. This just records
+    # the lineage so a renewed engagement can be traced back to the one it
+    # was cloned from.
+    cloned_from_project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+
     created_by_email = Column(String(255), nullable=False)
     created_by_name = Column(String(255), nullable=False)
 

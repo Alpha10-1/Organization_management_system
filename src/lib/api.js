@@ -453,6 +453,7 @@ export const fetchDepartments = () => apiGet("/departments/");
 export const createDepartment = (payload) => apiSend("/departments/", "POST", payload);
 export const updateDepartment = (id, payload) => apiSend(`/departments/${id}`, "PUT", payload);
 export const deleteDepartment = (id) => apiDelete(`/departments/${id}`);
+export const fetchDepartmentDashboard = (id) => apiGet(`/departments/${id}/dashboard`);
 
 // --- Tags ------------------------------------------------------------------
 
@@ -610,6 +611,10 @@ export const fetchProject = (id) => apiGet(`/projects/${id}`);
 export const createProject = (payload) => apiSend("/projects/", "POST", payload);
 export const updateProject = (id, payload) => apiSend(`/projects/${id}`, "PUT", payload);
 export const deleteProject = (id) => apiDelete(`/projects/${id}`);
+export const fetchProjectBudgetBurn = (id, alertThresholdPercent) =>
+  apiGet(`/projects/${id}/budget${alertThresholdPercent != null ? `?alert_threshold_percent=${alertThresholdPercent}` : ""}`);
+export const fetchProjectHealth = (id) => apiGet(`/projects/${id}/health`);
+export const cloneProject = (id, payload) => apiSend(`/projects/${id}/clone`, "POST", payload);
 
 // --- Project team assignment (individuals or whole departments) -------------------
 
@@ -648,6 +653,24 @@ export const updateContract = (id, payload) => apiSend(`/contracts/${id}`, "PUT"
 export const deleteContract = (id) => apiDelete(`/contracts/${id}`);
 export const fetchContractMargin = (id) => apiGet(`/contracts/${id}/margin`);
 
+// --- Change orders (contract scope/fee changes) --------------------------------------
+
+export function fetchChangeOrders(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.project_id) searchParams.append("project_id", params.project_id);
+  if (params.contract_id) searchParams.append("contract_id", params.contract_id);
+  if (params.status) searchParams.append("status", params.status);
+  const qs = searchParams.toString();
+  return apiGet(`/change-orders/${qs ? `?${qs}` : ""}`);
+}
+export const createChangeOrder = (payload) => apiSend("/change-orders/", "POST", payload);
+export const updateChangeOrder = (id, payload) => apiSend(`/change-orders/${id}`, "PUT", payload);
+export const approveChangeOrder = (id, payload = {}) =>
+  apiSend(`/change-orders/${id}/approve`, "POST", payload);
+export const rejectChangeOrder = (id, payload = {}) =>
+  apiSend(`/change-orders/${id}/reject`, "POST", payload);
+export const deleteChangeOrder = (id) => apiDelete(`/change-orders/${id}`);
+
 // --- Milestones ----------------------------------------------------------------------
 
 export function fetchMilestones(params = {}) {
@@ -660,6 +683,7 @@ export function fetchMilestones(params = {}) {
 export const createMilestone = (payload) => apiSend("/milestones/", "POST", payload);
 export const updateMilestone = (id, payload) => apiSend(`/milestones/${id}`, "PUT", payload);
 export const deleteMilestone = (id) => apiDelete(`/milestones/${id}`);
+export const signoffMilestone = (id, payload) => apiSend(`/milestones/${id}/signoff`, "PUT", payload);
 
 // --- Task templates ------------------------------------------------------------------
 
@@ -669,6 +693,71 @@ export const updateTaskTemplate = (id, payload) => apiSend(`/task-templates/${id
 export const deleteTaskTemplate = (id) => apiDelete(`/task-templates/${id}`);
 export const applyTaskTemplate = (id, payload) =>
   apiSend(`/task-templates/${id}/apply`, "POST", payload);
+export const applyTaskTemplateToUser = (id, payload) =>
+  apiSend(`/task-templates/${id}/apply-to-user`, "POST", payload);
+
+// --- Skills & certifications matrix ---------------------------------------------------
+
+export function fetchSkills(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.user_id) searchParams.append("user_id", params.user_id);
+  if (params.category) searchParams.append("category", params.category);
+  if (params.name) searchParams.append("name", params.name);
+  if (params.expiring_within_days != null) {
+    searchParams.append("expiring_within_days", params.expiring_within_days);
+  }
+  const qs = searchParams.toString();
+  return apiGet(`/skills/${qs ? `?${qs}` : ""}`);
+}
+export function fetchSkillsMatrix(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.department_id) searchParams.append("department_id", params.department_id);
+  if (params.name) searchParams.append("name", params.name);
+  const qs = searchParams.toString();
+  return apiGet(`/skills/matrix${qs ? `?${qs}` : ""}`);
+}
+export const createSkill = (payload) => apiSend("/skills/", "POST", payload);
+export const updateSkill = (id, payload) => apiSend(`/skills/${id}`, "PUT", payload);
+export const deleteSkill = (id) => apiDelete(`/skills/${id}`);
+
+// --- Cross-department resource requests -----------------------------------------------
+
+export function fetchResourceRequests(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.requesting_department_id) {
+    searchParams.append("requesting_department_id", params.requesting_department_id);
+  }
+  if (params.providing_department_id) {
+    searchParams.append("providing_department_id", params.providing_department_id);
+  }
+  if (params.project_id) searchParams.append("project_id", params.project_id);
+  if (params.status) searchParams.append("status", params.status);
+  const qs = searchParams.toString();
+  return apiGet(`/resource-requests/${qs ? `?${qs}` : ""}`);
+}
+export const createResourceRequest = (payload) => apiSend("/resource-requests/", "POST", payload);
+export const approveResourceRequest = (id, payload = {}) =>
+  apiSend(`/resource-requests/${id}/approve`, "POST", payload);
+export const rejectResourceRequest = (id, payload = {}) =>
+  apiSend(`/resource-requests/${id}/reject`, "POST", payload);
+export const cancelResourceRequest = (id) => apiDelete(`/resource-requests/${id}`);
+
+// --- Leave / PTO requests ---------------------------------------------------------------
+
+export function fetchLeaveRequests(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.user_id) searchParams.append("user_id", params.user_id);
+  if (params.approver_user_id) searchParams.append("approver_user_id", params.approver_user_id);
+  if (params.status) searchParams.append("status", params.status);
+  const qs = searchParams.toString();
+  return apiGet(`/leave-requests/${qs ? `?${qs}` : ""}`);
+}
+export const createLeaveRequest = (payload) => apiSend("/leave-requests/", "POST", payload);
+export const approveLeaveRequest = (id, payload = {}) =>
+  apiSend(`/leave-requests/${id}/approve`, "POST", payload);
+export const rejectLeaveRequest = (id, payload = {}) =>
+  apiSend(`/leave-requests/${id}/reject`, "POST", payload);
+export const cancelLeaveRequest = (id) => apiDelete(`/leave-requests/${id}`);
 
 // --- Engagement audit trail ------------------------------------------------------------
 

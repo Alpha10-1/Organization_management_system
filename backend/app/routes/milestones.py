@@ -3,11 +3,17 @@ from sqlalchemy.orm import Session
 
 from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user
+from app.core.department_scope import department_id_for_project, require_scoped_write
 from app.core.time import utcnow
 from app.db.session import get_db
 from app.models.milestone import Milestone
 from app.models.project import Project
-from app.schemas.milestone import MilestoneCreate, MilestoneOut, MilestoneUpdate
+from app.schemas.milestone import (
+    MilestoneCreate,
+    MilestoneOut,
+    MilestoneSignoffRequest,
+    MilestoneUpdate,
+)
 from app.schemas.user import UserPublic
 
 router = APIRouter(prefix="/milestones", tags=["Milestones"])
@@ -15,6 +21,7 @@ router = APIRouter(prefix="/milestones", tags=["Milestones"])
 DEFAULT_PAGE_LIMIT = 100
 MAX_PAGE_LIMIT = 200
 VALID_STATUSES = {"pending", "achieved", "missed"}
+VALID_APPROVAL_STATUSES = {"pending", "approved", "rejected"}
 
 
 @router.get("/", response_model=list[MilestoneOut])
@@ -56,6 +63,8 @@ def create_milestone(
     project = db.query(Project).filter(Project.id == payload.project_id, Project.deleted_at.is_(None)).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    require_scoped_write(db, current_user, department_id_for_project(db, payload.project_id))
 
     milestone = Milestone(
         **payload.model_dump(),
@@ -102,6 +111,8 @@ def update_milestone(
     if not milestone:
         raise HTTPException(status_code=404, detail="Milestone not found")
 
+    require_scoped_write(db, current_user, department_id_for_project(db, milestone.project_id))
+
     updates = payload.model_dump(exclude_unset=True)
 
     if "status" in updates and updates["status"] not in VALID_STATUSES:
@@ -131,6 +142,60 @@ def update_milestone(
     return milestone
 
 
+@router.put("/{milestone_id}/signoff", response_model=MilestoneOut)
+def signoff_milestone(
+    milestone_id: int,
+    payload: MilestoneSignoffRequest,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    """Lightweight client acknowledgment status for a milestone/deliverable,
+    tracked separately from the internal `status` field above -- useful for
+    engagement types where client sign-off matters (audit findings, tax
+    filings) without forcing every milestone through the workflow."""
+    milestone = db.query(Milestone).filter(Milestone.id == milestone_id, Milestone.deleted_at.is_(None)).first()
+    if not milestone:
+        raise HTTPException(status_code=404, detail="Milestone not found")
+
+    require_scoped_write(db, current_user, department_id_for_project(db, milestone.project_id))
+
+    if payload.status not in VALID_APPROVAL_STATUSES:
+        raise HTTPException(
+            status_code=400, detail=f"Invalid status. Must be one of: {sorted(VALID_APPROVAL_STATUSES)}"
+        )
+
+    milestone.approval_status = payload.status
+    if payload.status == "approved":
+        milestone.approved_at = utcnow()
+        milestone.approved_by_email = current_user.email
+        milestone.approved_by_name = current_user.name
+        milestone.rejection_reason = None
+    elif payload.status == "rejected":
+        milestone.approved_at = None
+        milestone.approved_by_email = current_user.email
+        milestone.approved_by_name = current_user.name
+        milestone.rejection_reason = payload.reason
+    else:  # pending
+        milestone.approved_at = None
+        milestone.rejection_reason = None
+
+    db.commit()
+    db.refresh(milestone)
+
+    log_activity(
+        db=db,
+        user=current_user,
+        action="milestone_signoff_updated",
+        entity_type="milestone",
+        entity_id=milestone.id,
+        title=f"Milestone sign-off {payload.status}: {milestone.name}",
+        description=f"Client sign-off on '{milestone.name}' set to '{payload.status}'."
+        + (f" Reason: {payload.reason}" if payload.status == "rejected" and payload.reason else ""),
+    )
+
+    return milestone
+
+
 @router.delete("/{milestone_id}")
 def delete_milestone(
     milestone_id: int,
@@ -140,6 +205,8 @@ def delete_milestone(
     milestone = db.query(Milestone).filter(Milestone.id == milestone_id, Milestone.deleted_at.is_(None)).first()
     if not milestone:
         raise HTTPException(status_code=404, detail="Milestone not found")
+
+    require_scoped_write(db, current_user, department_id_for_project(db, milestone.project_id))
 
     milestone.deleted_at = utcnow()
     db.commit()

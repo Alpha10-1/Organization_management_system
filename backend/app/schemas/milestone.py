@@ -31,9 +31,19 @@ class MilestoneOut(BaseModel):
     due_date: Optional[datetime] = None
     status: str
     achieved_at: Optional[datetime] = None
+    approval_status: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    approved_by_email: Optional[str] = None
+    approved_by_name: Optional[str] = None
+    rejection_reason: Optional[str] = None
     created_by_email: str
     created_by_name: str
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class MilestoneSignoffRequest(BaseModel):
+    status: str  # pending | approved | rejected
+    reason: Optional[str] = None

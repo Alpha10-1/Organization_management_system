@@ -23,6 +23,16 @@ class Milestone(Base):
     status = Column(String(20), nullable=False, default="pending", index=True)
     achieved_at = Column(DateTime, nullable=True)
 
+    # Client sign-off: separate from `status` above, since a milestone can
+    # be internally "achieved" before the client has acknowledged it.
+    # Null means sign-off isn't being tracked for this milestone; only set
+    # once someone calls the signoff endpoint.
+    approval_status = Column(String(20), nullable=True, index=True)  # pending | approved | rejected
+    approved_at = Column(DateTime, nullable=True)
+    approved_by_email = Column(String(255), nullable=True)
+    approved_by_name = Column(String(255), nullable=True)
+    rejection_reason = Column(Text, nullable=True)
+
     created_by_email = Column(String(255), nullable=False)
     created_by_name = Column(String(255), nullable=False)
 

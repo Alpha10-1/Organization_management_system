@@ -10,6 +10,7 @@ from app.models.tag import Tag, ClientTag
 from app.models.client_note import ClientNote
 from app.models.client_contact import ClientContact
 from app.models.contract import Contract
+from app.models.change_order import ChangeOrder
 from app.models.task import Task
 from app.models.task_dependency import TaskDependency
 from app.models.task_template import TaskTemplate, TaskTemplateItem
@@ -18,3 +19,6 @@ from app.models.time_entry import TimeEntry
 from app.models.notification import Notification
 from app.models.comment import Comment
 from app.models.sent_email import SentEmail
+from app.models.staff_skill import StaffSkill
+from app.models.resource_request import ResourceRequest
+from app.models.leave_request import LeaveRequest

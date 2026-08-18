@@ -83,3 +83,37 @@ def require_role(*allowed_roles: str):
         return current_user
 
     return role_checker
+
+
+def is_department_manager(db: Session, user_id: int, department_id: int) -> bool:
+    """A department manager is whoever a department's `department_head_user_id`
+    points at -- there's no separate global role for it, since seniority is
+    already tracked per-department rather than system-wide. Used both to
+    scope a department's own budget/cost-center fields and, via
+    core.department_scope, to grant a department head write access to
+    that department's clients/engagements/tasks even when they're not
+    personally a member of it."""
+    from app.models.department import Department
+
+    department = db.query(Department).filter(Department.id == department_id).first()
+    return bool(department and department.department_head_user_id == user_id)
+
+
+def require_department_manage(db: Session, current_user: UserPublic, department_id: int) -> None:
+    """Admins always pass; otherwise the caller must be the head of this
+    specific department. Used for department-record actions (editing a
+    department's own budget/cost-center fields) where "being a member of
+    the department" isn't the right test -- only its head should edit
+    those. For the broader client/project/task CRUD surface, see
+    core.department_scope.require_scoped_write instead, which also
+    allows any staff member scoped to their own department. Called
+    directly from route bodies (not as a Depends) since department_id is
+    a path parameter, not known at dependency-wiring time."""
+    if current_user.role == "admin":
+        return
+    if is_department_manager(db, current_user.id, department_id):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Only an admin or this department's head can perform this action",
+    )

@@ -20,6 +20,14 @@ class TaskTemplate(Base):
     engagement_type = Column(String(50), nullable=True, index=True)
     description = Column(Text, nullable=True)
 
+    # Onboarding/offboarding checklists reuse this same template pattern
+    # rather than a separate model -- a template with trigger_event set is
+    # applied to a person joining/leaving a department instead of to a
+    # project. department_id scopes it to one department's checklist (e.g.
+    # Tax's onboarding differs from Advisory's); null means firm-wide.
+    trigger_event = Column(String(20), nullable=True, index=True)  # onboarding | offboarding | null (engagement)
+    department_id = Column(Integer, ForeignKey("departments.id"), nullable=True, index=True)
+
     created_by_email = Column(String(255), nullable=False)
     created_by_name = Column(String(255), nullable=False)
 

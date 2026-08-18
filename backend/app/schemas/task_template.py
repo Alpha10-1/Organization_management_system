@@ -28,6 +28,8 @@ class TaskTemplateBase(BaseModel):
     name: str
     engagement_type: Optional[str] = None
     description: Optional[str] = None
+    trigger_event: Optional[str] = None  # onboarding | offboarding | null (engagement)
+    department_id: Optional[int] = None
 
 
 class TaskTemplateCreate(TaskTemplateBase):
@@ -38,6 +40,8 @@ class TaskTemplateUpdate(BaseModel):
     name: Optional[str] = None
     engagement_type: Optional[str] = None
     description: Optional[str] = None
+    trigger_event: Optional[str] = None
+    department_id: Optional[int] = None
 
 
 class TaskTemplateOut(TaskTemplateBase):
@@ -55,4 +59,13 @@ class TaskTemplateApplyRequest(BaseModel):
     project_id: int
     # If set, item due dates anchor to this date instead of the project's
     # start_date (or today, if the project has neither).
+    anchor_date: Optional[datetime] = None
+
+
+class TaskTemplateApplyToUserRequest(BaseModel):
+    """Applies an onboarding/offboarding checklist to a person instead of
+    a project: items become tasks assigned to them with no project/client
+    attached, due dates anchored to anchor_date (defaults to today)."""
+
+    user_email: str
     anchor_date: Optional[datetime] = None

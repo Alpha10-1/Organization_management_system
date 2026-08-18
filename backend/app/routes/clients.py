@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user
+from app.core.department_scope import require_scoped_write
 from app.core.time import utcnow
 from app.db.session import get_db
 from app.core.client_health import compute_client_health
@@ -105,6 +106,8 @@ def create_client(
 
     _validate_client_payload(client.client_type, client.first_name, client.last_name, client.company_name)
 
+    require_scoped_write(db, current_user, client.department_id)
+
     new_client = Client(**client.model_dump())
     db.add(new_client)
     db.commit()
@@ -158,6 +161,14 @@ def update_client(
         raise HTTPException(status_code=404, detail="Client not found")
 
     updates = payload.model_dump(exclude_unset=True)
+
+    require_scoped_write(db, current_user, client.department_id)
+    if "department_id" in updates and updates["department_id"] != client.department_id:
+        # Reassigning a client into a different department requires
+        # write access to that department too, not just the current one --
+        # otherwise a staff member could move a client out of a department
+        # they don't manage into one they do (or vice versa) to dodge scope.
+        require_scoped_write(db, current_user, updates["department_id"])
 
     if "parent_client_id" in updates and updates["parent_client_id"] is not None:
         if updates["parent_client_id"] == client_id:
@@ -216,6 +227,8 @@ def delete_client(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
+    require_scoped_write(db, current_user, client.department_id)
+
     client_name = client.display_name
 
     # Soft delete: keep the row (and any files/activity referencing it)
@@ -254,7 +267,18 @@ def bulk_update_status(
         .all()
     )
 
+    allowed_clients = []
     for client in clients:
+        try:
+            require_scoped_write(db, current_user, client.department_id)
+            allowed_clients.append(client)
+        except HTTPException:
+            continue
+
+    if not allowed_clients:
+        raise HTTPException(status_code=403, detail="You don't have write access to any of these clients")
+
+    for client in allowed_clients:
         client.status = payload.status
 
     db.commit()
@@ -264,11 +288,11 @@ def bulk_update_status(
         user=current_user,
         action="client_bulk_status_updated",
         entity_type="client",
-        title=f"Bulk status update: {len(clients)} client(s) -> {payload.status}",
-        description=f"Set status to '{payload.status}' for {len(clients)} client(s).",
+        title=f"Bulk status update: {len(allowed_clients)} client(s) -> {payload.status}",
+        description=f"Set status to '{payload.status}' for {len(allowed_clients)} client(s).",
     )
 
-    return {"message": f"Updated {len(clients)} client(s)", "updated": len(clients)}
+    return {"message": f"Updated {len(allowed_clients)} client(s)", "updated": len(allowed_clients)}
 
 
 @router.get("/{client_id}/notes", response_model=list[ClientNoteOut])
@@ -299,6 +323,8 @@ def add_client_note(
     )
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
+
+    require_scoped_write(db, current_user, client.department_id)
 
     note = ClientNote(
         client_id=client_id,
@@ -406,6 +432,8 @@ def add_client_contact(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
+    require_scoped_write(db, current_user, client.department_id)
+
     if payload.is_primary:
         # Only one primary contact per client: demote any existing one.
         db.query(ClientContact).filter(
@@ -452,6 +480,9 @@ def update_client_contact(
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
 
+    client = db.query(Client).filter(Client.id == client_id).first()
+    require_scoped_write(db, current_user, client.department_id if client else None)
+
     updates = payload.model_dump(exclude_unset=True)
 
     if updates.get("is_primary"):
@@ -488,6 +519,9 @@ def delete_client_contact(
     )
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
+
+    client = db.query(Client).filter(Client.id == client_id).first()
+    require_scoped_write(db, current_user, client.department_id if client else None)
 
     contact.deleted_at = utcnow()
     db.commit()

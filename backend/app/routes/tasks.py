@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user, get_user_by_email
+from app.core.department_scope import department_id_for_task, require_scoped_write
 from app.core.notify import notify
 from app.core.time import utcnow
 from app.db.session import get_db
@@ -165,6 +166,10 @@ def create_task(
     if payload.recurrence_rule and not payload.due_date:
         raise HTTPException(status_code=400, detail="A due_date is required to set up a recurring task")
 
+    require_scoped_write(
+        db, current_user, department_id_for_task(db, project_id=payload.project_id, client_id=payload.client_id)
+    )
+
     assigned_name = None
     if payload.assigned_to_email:
         assignee = get_user_by_email(db, payload.assigned_to_email.lower())
@@ -290,6 +295,19 @@ def update_task(
         if not parent:
             raise HTTPException(status_code=404, detail="Parent task not found")
 
+    # The task's own assignee can always update it (e.g. marking it done)
+    # even if it's on another department's engagement -- this matters for
+    # cross-department resource loans, where a borrowed specialist is
+    # individually assigned to a task but isn't a member of that
+    # department. Anyone else needs ordinary department-scoped access.
+    is_assignee = task.assigned_to_email and task.assigned_to_email == current_user.email
+    if not is_assignee:
+        new_project_id = updates.get("project_id", task.project_id)
+        new_client_id = updates.get("client_id", task.client_id)
+        require_scoped_write(
+            db, current_user, department_id_for_task(db, project_id=new_project_id, client_id=new_client_id)
+        )
+
     if updates.get("status") == "done":
         blocked_by, _ = _dependency_ids(db, task_id)
         if blocked_by:
@@ -380,6 +398,10 @@ def delete_task(
     task = db.query(Task).filter(Task.id == task_id, Task.deleted_at.is_(None)).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    require_scoped_write(
+        db, current_user, department_id_for_task(db, project_id=task.project_id, client_id=task.client_id)
+    )
 
     task.deleted_at = utcnow()
     db.commit()

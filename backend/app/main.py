@@ -6,17 +6,21 @@ from app.core.config import settings
 from app.core.seed import seed_demo_users
 from app.db.session import Base, SessionLocal, engine
 from app.routes.auth import router as auth_router
+from app.routes.change_orders import router as change_orders_router
 from app.routes.clients import router as clients_router
 from app.routes.comments import router as comments_router
 from app.routes.contracts import router as contracts_router
 from app.routes.departments import router as departments_router
 from app.routes.files import router as files_router
+from app.routes.leave_requests import router as leave_requests_router
 from app.routes.milestones import router as milestones_router
 from app.routes.notifications import router as notifications_router
 from app.routes.projects import router as projects_router
 from app.routes.protected import router as protected_router
 from app.routes.reports import router as reports_router
+from app.routes.resource_requests import router as resource_requests_router
 from app.routes.search import router as search_router
+from app.routes.skills import router as skills_router
 from app.routes.tags import router as tags_router
 from app.routes.task_templates import router as task_templates_router
 from app.routes.tasks import router as tasks_router
@@ -56,11 +60,15 @@ app.include_router(tasks_router)
 app.include_router(task_templates_router)
 app.include_router(milestones_router)
 app.include_router(contracts_router)
+app.include_router(change_orders_router)
 app.include_router(time_entries_router)
 app.include_router(notifications_router)
 app.include_router(comments_router)
 app.include_router(search_router)
 app.include_router(reports_router)
+app.include_router(skills_router)
+app.include_router(resource_requests_router)
+app.include_router(leave_requests_router)
 
 @app.get("/")
 async def root():

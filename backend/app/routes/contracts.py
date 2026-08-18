@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user
+from app.core.department_scope import department_id_for_client, department_id_for_project, require_scoped_write
 from app.core.time import utcnow
 from app.db.session import get_db
 from app.models.contract import Contract
@@ -62,6 +63,8 @@ def create_contract(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    require_scoped_write(db, current_user, department_id_for_client(db, project.client_id))
+
     if payload.signed_date and payload.expiry_date and payload.expiry_date < payload.signed_date:
         raise HTTPException(status_code=400, detail="expiry_date cannot be before signed_date")
 
@@ -112,6 +115,8 @@ def update_contract(
 
     updates = payload.model_dump(exclude_unset=True)
 
+    require_scoped_write(db, current_user, department_id_for_project(db, contract.project_id))
+
     if "billing_type" in updates and updates["billing_type"] not in VALID_BILLING_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid billing_type. Must be one of: {sorted(VALID_BILLING_TYPES)}")
     if "status" in updates and updates["status"] not in VALID_STATUSES:
@@ -121,6 +126,12 @@ def update_contract(
     new_expiry = updates.get("expiry_date", contract.expiry_date)
     if new_signed and new_expiry and new_expiry < new_signed:
         raise HTTPException(status_code=400, detail="expiry_date cannot be before signed_date")
+
+    if "project_id" in updates and updates["project_id"] != contract.project_id:
+        new_project = db.query(Project).filter(Project.id == updates["project_id"], Project.deleted_at.is_(None)).first()
+        if not new_project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_scoped_write(db, current_user, department_id_for_client(db, new_project.client_id))
 
     for key, value in updates.items():
         setattr(contract, key, value)
@@ -150,6 +161,8 @@ def delete_contract(
     contract = db.query(Contract).filter(Contract.id == contract_id, Contract.deleted_at.is_(None)).first()
     if not contract:
         raise HTTPException(status_code=404, detail="Contract not found")
+
+    require_scoped_write(db, current_user, department_id_for_project(db, contract.project_id))
 
     contract.deleted_at = utcnow()
     db.commit()

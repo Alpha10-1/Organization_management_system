@@ -3,17 +3,30 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.core.activity_logger import log_activity
+from app.core.budget import DEFAULT_ALERT_THRESHOLD_PERCENT, compute_budget_burn
 from app.core.deps import get_current_active_user, get_user_by_email
+from app.core.department_scope import department_id_for_client, department_id_for_project, require_scoped_write
+from app.core.engagement_health import compute_engagement_health
 from app.core.time import utcnow
 from app.db.session import get_db
 from app.models.activity_log import ActivityLog
 from app.models.client import Client
 from app.models.department import Department
+from app.models.milestone import Milestone
 from app.models.project import Project
 from app.models.project_assignment import ProjectAssignment
 from app.models.task import Task
 from app.models.user import User
-from app.schemas.project import ProjectCreate, ProjectOut, ProjectSummary, ProjectUpdate
+from app.schemas.project import (
+    ProjectBudgetBurn,
+    ProjectCloneRequest,
+    ProjectCloneResult,
+    ProjectCreate,
+    ProjectHealth,
+    ProjectOut,
+    ProjectSummary,
+    ProjectUpdate,
+)
 from app.schemas.project_assignment import (
     ProjectAssignmentCreate,
     ProjectAssignmentOut,
@@ -143,6 +156,8 @@ def create_project(
     if payload.start_date and payload.end_date and payload.end_date < payload.start_date:
         raise HTTPException(status_code=400, detail="end_date cannot be before start_date")
 
+    require_scoped_write(db, current_user, client.department_id)
+
     extra = _resolve_partner_manager(db, payload)
 
     project = Project(
@@ -206,6 +221,8 @@ def update_project(
 
     updates = payload.model_dump(exclude_unset=True)
 
+    require_scoped_write(db, current_user, department_id_for_client(db, project.client_id))
+
     if "type" in updates and updates["type"] not in VALID_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid type. Must be one of: {sorted(VALID_TYPES)}")
     if "status" in updates and updates["status"] not in VALID_STATUSES:
@@ -217,6 +234,7 @@ def update_project(
         client = db.query(Client).filter(Client.id == updates["client_id"], Client.deleted_at.is_(None)).first()
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
+        require_scoped_write(db, current_user, client.department_id)
 
     new_start = updates.get("start_date", project.start_date)
     new_end = updates.get("end_date", project.end_date)
@@ -320,6 +338,8 @@ def delete_project(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    require_scoped_write(db, current_user, department_id_for_client(db, project.client_id))
+
     project.deleted_at = utcnow()
     db.commit()
 
@@ -371,6 +391,183 @@ def get_project_history(
         }
         for log in logs
     ]
+
+
+@router.get("/{project_id}/budget", response_model=ProjectBudgetBurn)
+def get_project_budget_burn(
+    project_id: int,
+    alert_threshold_percent: float = Query(default=DEFAULT_ALERT_THRESHOLD_PERCENT, ge=0, le=200),
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    """Proactive '% of budget consumed' view alongside the contract margin
+    endpoint: logged cost vs. engagement budget, with an alert threshold."""
+    project = db.query(Project).filter(Project.id == project_id, Project.deleted_at.is_(None)).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    return compute_budget_burn(db, project, alert_threshold_percent)
+
+
+@router.get("/{project_id}/health", response_model=ProjectHealth)
+def get_project_health(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    """Partner-level rollup: overdue tasks + budget burn + risk level +
+    timeline slippage folded into one green/amber/red signal."""
+    project = db.query(Project).filter(Project.id == project_id, Project.deleted_at.is_(None)).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    return compute_engagement_health(db, project)
+
+
+@router.post("/{project_id}/clone", response_model=ProjectCloneResult)
+def clone_project(
+    project_id: int,
+    payload: ProjectCloneRequest,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    """Clones an engagement (e.g. an annual audit renewing every year) into
+    a new one, optionally copying its milestones, team, and open tasks with
+    dates shifted to match the new start date -- mirroring the recurring-
+    task clone pattern instead of requiring the engagement to be rebuilt
+    from scratch."""
+    source = db.query(Project).filter(Project.id == project_id, Project.deleted_at.is_(None)).first()
+    if not source:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    require_scoped_write(db, current_user, department_id_for_client(db, source.client_id))
+
+    if payload.start_date and payload.end_date and payload.end_date < payload.start_date:
+        raise HTTPException(status_code=400, detail="end_date cannot be before start_date")
+
+    date_shift = None
+    if payload.start_date and source.start_date:
+        date_shift = payload.start_date - source.start_date
+
+    new_project = Project(
+        client_id=source.client_id,
+        name=payload.name or f"{source.name} (Renewal)",
+        type=source.type,
+        status="planning",
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        budget=source.budget,
+        engagement_partner_email=source.engagement_partner_email,
+        engagement_partner_name=source.engagement_partner_name,
+        engagement_manager_email=source.engagement_manager_email,
+        engagement_manager_name=source.engagement_manager_name,
+        description=source.description,
+        risk_level=source.risk_level,
+        compliance_flag=source.compliance_flag,
+        objectives=source.objectives,
+        deliverables=source.deliverables,
+        stakeholders=source.stakeholders,
+        billing_notes=source.billing_notes,
+        cloned_from_project_id=source.id,
+        created_by_email=current_user.email,
+        created_by_name=current_user.name,
+    )
+    db.add(new_project)
+    db.flush()  # assign new_project.id before creating child rows
+
+    milestones_cloned = 0
+    if payload.include_milestones:
+        milestones = (
+            db.query(Milestone)
+            .filter(Milestone.project_id == source.id, Milestone.deleted_at.is_(None))
+            .all()
+        )
+        for m in milestones:
+            due_date = m.due_date + date_shift if (m.due_date and date_shift) else m.due_date
+            db.add(
+                Milestone(
+                    project_id=new_project.id,
+                    name=m.name,
+                    description=m.description,
+                    due_date=due_date,
+                    status="pending",
+                    created_by_email=current_user.email,
+                    created_by_name=current_user.name,
+                )
+            )
+            milestones_cloned += 1
+
+    assignments_cloned = 0
+    if payload.include_team:
+        assignments = db.query(ProjectAssignment).filter(ProjectAssignment.project_id == source.id).all()
+        for a in assignments:
+            db.add(
+                ProjectAssignment(
+                    project_id=new_project.id,
+                    user_id=a.user_id,
+                    department_id=a.department_id,
+                    role=a.role,
+                    allocation_percent=a.allocation_percent,
+                    assigned_by_email=current_user.email,
+                    assigned_by_name=current_user.name,
+                )
+            )
+            assignments_cloned += 1
+
+    tasks_cloned = 0
+    if payload.include_tasks:
+        tasks = (
+            db.query(Task)
+            .filter(
+                Task.project_id == source.id,
+                Task.deleted_at.is_(None),
+                Task.status != "done",
+                Task.parent_task_id.is_(None),
+            )
+            .all()
+        )
+        for t in tasks:
+            due_date = t.due_date + date_shift if (t.due_date and date_shift) else t.due_date
+            db.add(
+                Task(
+                    title=t.title,
+                    description=t.description,
+                    client_id=new_project.client_id,
+                    project_id=new_project.id,
+                    status="open",
+                    priority=t.priority,
+                    due_date=due_date,
+                    assigned_to_email=t.assigned_to_email,
+                    assigned_to_name=t.assigned_to_name,
+                    created_by_email=current_user.email,
+                    created_by_name=current_user.name,
+                )
+            )
+            tasks_cloned += 1
+
+    db.commit()
+    db.refresh(new_project)
+
+    log_activity(
+        db=db,
+        user=current_user,
+        action="project_cloned",
+        entity_type="project",
+        entity_id=new_project.id,
+        title=f"Engagement cloned: {new_project.name}",
+        description=(
+            f"Cloned from engagement #{source.id} ('{source.name}'). "
+            f"Copied {milestones_cloned} milestone(s), {assignments_cloned} assignment(s), "
+            f"{tasks_cloned} task(s)."
+        ),
+    )
+
+    return ProjectCloneResult(
+        project=ProjectOut.model_validate(new_project),
+        milestones_cloned=milestones_cloned,
+        assignments_cloned=assignments_cloned,
+        tasks_cloned=tasks_cloned,
+    )
 
 
 # --- Team assignment (individuals or whole departments) -------------------
@@ -430,6 +627,8 @@ def add_project_assignment(
     project = db.query(Project).filter(Project.id == project_id, Project.deleted_at.is_(None)).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    require_scoped_write(db, current_user, department_id_for_client(db, project.client_id))
 
     if payload.user_id:
         user = db.query(User).filter(User.id == payload.user_id).first()
@@ -497,6 +696,8 @@ def update_project_assignment(
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found")
 
+    require_scoped_write(db, current_user, department_id_for_project(db, project_id))
+
     updates = payload.model_dump(exclude_unset=True)
     if "allocation_percent" in updates and updates["allocation_percent"] is not None and not assignment.user_id:
         raise HTTPException(
@@ -526,6 +727,8 @@ def remove_project_assignment(
     )
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found")
+
+    require_scoped_write(db, current_user, department_id_for_project(db, project_id))
 
     db.delete(assignment)
     db.commit()
