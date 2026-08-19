@@ -12,6 +12,7 @@ from app.routes.comments import router as comments_router
 from app.routes.contracts import router as contracts_router
 from app.routes.departments import router as departments_router
 from app.routes.files import router as files_router
+from app.routes.independence import router as independence_router
 from app.routes.invoices import router as invoices_router
 from app.routes.leave_requests import router as leave_requests_router
 from app.routes.milestones import router as milestones_router
@@ -71,6 +72,7 @@ app.include_router(reports_router)
 app.include_router(skills_router)
 app.include_router(resource_requests_router)
 app.include_router(leave_requests_router)
+app.include_router(independence_router)
 
 @app.get("/")
 async def root():

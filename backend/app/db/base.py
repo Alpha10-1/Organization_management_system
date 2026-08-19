@@ -23,3 +23,4 @@ from app.models.sent_email import SentEmail
 from app.models.staff_skill import StaffSkill
 from app.models.resource_request import ResourceRequest
 from app.models.leave_request import LeaveRequest
+from app.models.independence import IndependenceDisclosure, ConflictOverride

@@ -7,11 +7,13 @@ from app.core.budget import DEFAULT_ALERT_THRESHOLD_PERCENT, compute_budget_burn
 from app.core.deps import get_current_active_user, get_user_by_email
 from app.core.department_scope import department_id_for_client, department_id_for_project, require_scoped_write
 from app.core.engagement_health import compute_engagement_health
+from app.core.independence import check_conflicts
 from app.core.time import utcnow
 from app.db.session import get_db
 from app.models.activity_log import ActivityLog
 from app.models.client import Client
 from app.models.department import Department
+from app.models.independence import ConflictOverride
 from app.models.milestone import Milestone
 from app.models.project import Project
 from app.models.project_assignment import ProjectAssignment
@@ -641,6 +643,51 @@ def add_project_assignment(
         )
         if existing:
             raise HTTPException(status_code=400, detail="This user is already assigned to the engagement")
+
+        # Independence/conflict-of-interest check: don't let anyone get
+        # staffed on an engagement while they have an active disclosed
+        # conflict against this client (or its group hierarchy) without
+        # someone explicitly signing off on an override.
+        conflicts = check_conflicts(db, payload.user_id, project.client_id)
+        if conflicts:
+            reason = (payload.conflict_override_reason or "").strip()
+            if not reason:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "This staff member has an active independence conflict against this client. "
+                        "Resubmit with conflict_override_reason to proceed anyway.",
+                        "conflicts": [
+                            {"id": c.id, "disclosure_type": c.disclosure_type, "description": c.description}
+                            for c in conflicts
+                        ],
+                    },
+                )
+            if current_user.role != "admin":
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only an admin can override an independence conflict when staffing this engagement",
+                )
+            override = ConflictOverride(
+                project_id=project.id,
+                user_id=payload.user_id,
+                client_id=project.client_id,
+                disclosure_ids=",".join(str(c.id) for c in conflicts),
+                reason=reason,
+                overridden_by_email=current_user.email,
+                overridden_by_name=current_user.name,
+            )
+            db.add(override)
+            log_activity(
+                db=db,
+                user=current_user,
+                action="independence_conflict_overridden",
+                entity_type="project",
+                entity_id=project.id,
+                title=f"Independence conflict overridden: {project.name}",
+                description=f"Staffed user #{payload.user_id} on '{project.name}' despite "
+                f"{len(conflicts)} active conflict(s). Reason: {reason}",
+            )
     else:
         dept = db.query(Department).filter(Department.id == payload.department_id).first()
         if not dept:

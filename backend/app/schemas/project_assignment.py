@@ -12,6 +12,14 @@ class ProjectAssignmentCreate(BaseModel):
     role: Optional[str] = None
     allocation_percent: Optional[int] = Field(default=None, ge=1, le=100)
 
+    # If staffing this person trips an active independence conflict (see
+    # app.core.independence), the assignment is normally rejected with a
+    # 409 listing the conflicting disclosures. Passing a non-empty reason
+    # here tells the endpoint to proceed anyway and log a ConflictOverride
+    # -- only an admin may do this. Ignored for department assignments,
+    # since conflicts are checked per individual.
+    conflict_override_reason: Optional[str] = None
+
     @model_validator(mode="after")
     def _exactly_one_target(self):
         if bool(self.user_id) == bool(self.department_id):
