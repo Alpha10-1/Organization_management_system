@@ -1,0 +1,1789 @@
+From a74fc143b97090bfedee3843045f230d778d745d Mon Sep 17 00:00:00 2001
+From: Claude <claude@anthropic.com>
+Date: Wed, 19 Aug 2026 07:13:54 +0000
+Subject: [PATCH] feat: billing & invoicing (WIP, invoice generation/lifecycle,
+ realization rate)
+
+Closes the loop between work happening (time entries) and revenue
+capture (invoices), the highest-leverage gap identified in the Q1
+roadmap: the system tracked cost but not revenue capture.
+
+Backend:
+- Invoice / InvoiceLineItem models. TimeEntry gains
+  invoice_line_item_id (null = still WIP); User gains
+  standard_billing_rate as the fallback rate when a project's
+  contract doesn't carry an hourly_rate.
+- app/core/billing.py: rate resolution (contract hourly_rate -> user
+  standard rate -> unrated), compute_wip(), compute_realization()
+  grouped by project/partner/department.
+- /invoices routes: generate from WIP time entries and/or manual
+  line items -> send -> record-payment (supports partial payments)
+  -> void (releases entries back to WIP) -> delete (draft only);
+  plus /invoices/wip.
+- /reports/realization: billed-vs-worked rate by engagement,
+  partner, or department, with firm-wide rollup.
+- PATCH /users/{email}/billing-rate (admin-only) to set a user's
+  standard rate.
+- Department-scoped write permissions wired in via the existing
+  require_scoped_write pattern.
+- Alembic migration e5f6a7b8c9d0, verified upgrade -> downgrade ->
+  re-upgrade against a pre-change schema snapshot.
+
+Tests: 31 new tests (WIP valuation, rate fallback, invoice
+generation/lifecycle, void-releases-WIP, permission boundaries,
+realization math including partial billing and void exclusion).
+344/344 backend tests passing (313 pre-existing + 31 new), full
+regression run clean.
+
+Not in this commit: frontend UI for invoices/WIP/realization;
+independence & conflict-of-interest checks and workpaper review
+chains (Q1's other two items).
+---
+ .../e5f6a7b8c9d0_add_billing_invoicing.py     | 112 +++++
+ backend/app/core/billing.py                   | 210 ++++++++
+ backend/app/db/base.py                        |   1 +
+ backend/app/main.py                           |   2 +
+ backend/app/models/invoice.py                 |  75 +++
+ backend/app/models/time_entry.py              |   8 +
+ backend/app/models/user.py                    |  10 +-
+ backend/app/routes/invoices.py                | 434 ++++++++++++++++
+ backend/app/routes/reports.py                 |  67 ++-
+ backend/app/routes/users.py                   |  34 ++
+ backend/app/schemas/invoice.py                | 116 +++++
+ backend/app/schemas/time_entry.py             |   1 +
+ backend/app/schemas/user_management.py        |   6 +
+ backend/tests/test_invoices.py                | 468 ++++++++++++++++++
+ 14 files changed, 1542 insertions(+), 2 deletions(-)
+ create mode 100644 backend/alembic/versions/e5f6a7b8c9d0_add_billing_invoicing.py
+ create mode 100644 backend/app/core/billing.py
+ create mode 100644 backend/app/models/invoice.py
+ create mode 100644 backend/app/routes/invoices.py
+ create mode 100644 backend/app/schemas/invoice.py
+ create mode 100644 backend/tests/test_invoices.py
+
+diff --git a/backend/alembic/versions/e5f6a7b8c9d0_add_billing_invoicing.py b/backend/alembic/versions/e5f6a7b8c9d0_add_billing_invoicing.py
+new file mode 100644
+index 0000000..c945d95
+--- /dev/null
++++ b/backend/alembic/versions/e5f6a7b8c9d0_add_billing_invoicing.py
+@@ -0,0 +1,112 @@
++"""add invoices, invoice line items, and billing rate fields
++
++Revision ID: e5f6a7b8c9d0
++Revises: d4e5f6a7b8c9
++Create Date: 2026-08-19 00:00:00.000000
++
++"""
++from typing import Sequence, Union
++
++from alembic import op
++import sqlalchemy as sa
++
++
++# revision identifiers, used by Alembic.
++revision: str = 'e5f6a7b8c9d0'
++down_revision: Union[str, Sequence[str], None] = 'd4e5f6a7b8c9'
++branch_labels: Union[str, Sequence[str], None] = None
++depends_on: Union[str, Sequence[str], None] = None
++
++
++def upgrade() -> None:
++    """Upgrade schema."""
++    op.create_table(
++        'invoices',
++        sa.Column('id', sa.Integer(), nullable=False),
++        sa.Column('project_id', sa.Integer(), nullable=False),
++        sa.Column('contract_id', sa.Integer(), nullable=True),
++        sa.Column('invoice_number', sa.String(length=50), nullable=False),
++        sa.Column('status', sa.String(length=20), nullable=False),
++        sa.Column('issue_date', sa.Date(), nullable=False),
++        sa.Column('due_date', sa.Date(), nullable=True),
++        sa.Column('subtotal', sa.Numeric(12, 2), nullable=False),
++        sa.Column('tax_amount', sa.Numeric(12, 2), nullable=False),
++        sa.Column('total_amount', sa.Numeric(12, 2), nullable=False),
++        sa.Column('amount_paid', sa.Numeric(12, 2), nullable=False),
++        sa.Column('paid_date', sa.Date(), nullable=True),
++        sa.Column('notes', sa.Text(), nullable=True),
++        sa.Column('void_reason', sa.Text(), nullable=True),
++        sa.Column('created_by_email', sa.String(length=255), nullable=False),
++        sa.Column('created_by_name', sa.String(length=255), nullable=False),
++        sa.Column('created_at', sa.DateTime(), nullable=True),
++        sa.Column('updated_at', sa.DateTime(), nullable=True),
++        sa.Column('deleted_at', sa.DateTime(), nullable=True),
++        sa.ForeignKeyConstraint(['project_id'], ['projects.id']),
++        sa.ForeignKeyConstraint(['contract_id'], ['contracts.id']),
++        sa.PrimaryKeyConstraint('id'),
++    )
++    with op.batch_alter_table('invoices', schema=None) as batch_op:
++        batch_op.create_index(batch_op.f('ix_invoices_id'), ['id'], unique=False)
++        batch_op.create_index(batch_op.f('ix_invoices_project_id'), ['project_id'], unique=False)
++        batch_op.create_index(batch_op.f('ix_invoices_contract_id'), ['contract_id'], unique=False)
++        batch_op.create_index(batch_op.f('ix_invoices_invoice_number'), ['invoice_number'], unique=True)
++        batch_op.create_index(batch_op.f('ix_invoices_status'), ['status'], unique=False)
++        batch_op.create_index(batch_op.f('ix_invoices_deleted_at'), ['deleted_at'], unique=False)
++
++    op.create_table(
++        'invoice_line_items',
++        sa.Column('id', sa.Integer(), nullable=False),
++        sa.Column('invoice_id', sa.Integer(), nullable=False),
++        sa.Column('description', sa.String(length=500), nullable=False),
++        sa.Column('hours', sa.Numeric(6, 2), nullable=True),
++        sa.Column('rate', sa.Numeric(10, 2), nullable=True),
++        sa.Column('amount', sa.Numeric(12, 2), nullable=False),
++        sa.Column('created_at', sa.DateTime(), nullable=True),
++        sa.ForeignKeyConstraint(['invoice_id'], ['invoices.id']),
++        sa.PrimaryKeyConstraint('id'),
++    )
++    with op.batch_alter_table('invoice_line_items', schema=None) as batch_op:
++        batch_op.create_index(batch_op.f('ix_invoice_line_items_id'), ['id'], unique=False)
++        batch_op.create_index(batch_op.f('ix_invoice_line_items_invoice_id'), ['invoice_id'], unique=False)
++
++    with op.batch_alter_table('time_entries', schema=None) as batch_op:
++        batch_op.add_column(sa.Column('invoice_line_item_id', sa.Integer(), nullable=True))
++        batch_op.create_index(
++            batch_op.f('ix_time_entries_invoice_line_item_id'), ['invoice_line_item_id'], unique=False
++        )
++        batch_op.create_foreign_key(
++            'fk_time_entries_invoice_line_item_id_invoice_line_items',
++            'invoice_line_items',
++            ['invoice_line_item_id'],
++            ['id'],
++        )
++
++    with op.batch_alter_table('users', schema=None) as batch_op:
++        batch_op.add_column(sa.Column('standard_billing_rate', sa.Numeric(10, 2), nullable=True))
++
++
++def downgrade() -> None:
++    """Downgrade schema."""
++    with op.batch_alter_table('users', schema=None) as batch_op:
++        batch_op.drop_column('standard_billing_rate')
++
++    with op.batch_alter_table('time_entries', schema=None) as batch_op:
++        batch_op.drop_constraint(
++            'fk_time_entries_invoice_line_item_id_invoice_line_items', type_='foreignkey'
++        )
++        batch_op.drop_index(batch_op.f('ix_time_entries_invoice_line_item_id'))
++        batch_op.drop_column('invoice_line_item_id')
++
++    with op.batch_alter_table('invoice_line_items', schema=None) as batch_op:
++        batch_op.drop_index(batch_op.f('ix_invoice_line_items_invoice_id'))
++        batch_op.drop_index(batch_op.f('ix_invoice_line_items_id'))
++    op.drop_table('invoice_line_items')
++
++    with op.batch_alter_table('invoices', schema=None) as batch_op:
++        batch_op.drop_index(batch_op.f('ix_invoices_deleted_at'))
++        batch_op.drop_index(batch_op.f('ix_invoices_status'))
++        batch_op.drop_index(batch_op.f('ix_invoices_invoice_number'))
++        batch_op.drop_index(batch_op.f('ix_invoices_contract_id'))
++        batch_op.drop_index(batch_op.f('ix_invoices_project_id'))
++        batch_op.drop_index(batch_op.f('ix_invoices_id'))
++    op.drop_table('invoices')
+diff --git a/backend/app/core/billing.py b/backend/app/core/billing.py
+new file mode 100644
+index 0000000..ef69059
+--- /dev/null
++++ b/backend/app/core/billing.py
+@@ -0,0 +1,210 @@
++"""Billing math shared between the invoices routes and reports: resolving
++what a given hour of work is worth, and rolling that up into WIP and
++realization-rate figures.
++
++Rate resolution order for a project:
++  1. The project's active signed contract's hourly_rate, if it has one
++     (covers billing_type == "hourly", and any contract that records an
++     effective rate for a retainer).
++  2. Otherwise, fall back per-entry to the logging user's
++     User.standard_billing_rate.
++  3. If neither is set, the entry has no resolvable rate -- it still
++     counts toward WIP hours, but is excluded from WIP/realization dollar
++     figures (rather than silently valuing it at 0, which would distort
++     realization rates downward).
++"""
++
++from dataclasses import dataclass, field
++from datetime import date as date_type
++from decimal import ROUND_HALF_UP, Decimal
++
++from sqlalchemy.orm import Session
++
++from app.models.contract import Contract
++from app.models.invoice import Invoice, InvoiceLineItem
++from app.models.time_entry import TimeEntry
++from app.models.user import User
++
++TWO_PLACES = Decimal("0.01")
++
++
++def money(value: Decimal) -> Decimal:
++    """Round a monetary Decimal to 2 places, half-up, so amounts computed
++    from hours*rate multiplication (which can produce more than 2 decimal
++    places) always serialize the way every other currency field in this
++    app does."""
++    return value.quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
++
++
++def project_hourly_rate(db: Session, project_id: int) -> Decimal | None:
++    """The contract-level rate to use for this project, if any. Prefers the
++    most recently signed contract with a status of 'signed' and a set
++    hourly_rate; falls back to any contract with an hourly_rate if none are
++    signed yet, so WIP still has a rate to work with during drafting."""
++    contract = (
++        db.query(Contract)
++        .filter(
++            Contract.project_id == project_id,
++            Contract.deleted_at.is_(None),
++            Contract.hourly_rate.isnot(None),
++        )
++        .order_by((Contract.status == "signed").desc(), Contract.signed_date.desc().nullslast())
++        .first()
++    )
++    return contract.hourly_rate if contract else None
++
++
++def resolve_rate(db: Session, entry: TimeEntry, *, project_rate_cache: dict[int, Decimal | None] | None = None) -> Decimal | None:
++    """The rate ($/hr) that applies to a single time entry, per the
++    resolution order documented above."""
++    cache = project_rate_cache if project_rate_cache is not None else {}
++    if entry.project_id not in cache:
++        cache[entry.project_id] = project_hourly_rate(db, entry.project_id)
++    rate = cache[entry.project_id]
++    if rate is not None:
++        return rate
++
++    user = db.query(User).filter(User.email == entry.user_email).first()
++    if user and user.standard_billing_rate is not None:
++        return user.standard_billing_rate
++    return None
++
++
++@dataclass
++class WipSummary:
++    project_id: int
++    total_hours: Decimal = Decimal("0.00")
++    valued_hours: Decimal = Decimal("0.00")
++    unrated_hours: Decimal = Decimal("0.00")
++    wip_value: Decimal = Decimal("0.00")
++    entry_count: int = 0
++    entries: list[TimeEntry] = field(default_factory=list)
++
++
++def compute_wip(db: Session, project_id: int) -> WipSummary:
++    """WIP = billable time entries logged against this project that
++    haven't been pulled onto an invoice yet. This is literally "work
++    happened, money not yet captured" -- the core gap billing closes."""
++    entries = (
++        db.query(TimeEntry)
++        .filter(
++            TimeEntry.project_id == project_id,
++            TimeEntry.deleted_at.is_(None),
++            TimeEntry.billable.is_(True),
++            TimeEntry.invoice_line_item_id.is_(None),
++        )
++        .order_by(TimeEntry.entry_date.asc())
++        .all()
++    )
++
++    summary = WipSummary(project_id=project_id)
++    rate_cache: dict[int, Decimal | None] = {}
++    for entry in entries:
++        summary.total_hours += entry.hours
++        summary.entry_count += 1
++        summary.entries.append(entry)
++        rate = resolve_rate(db, entry, project_rate_cache=rate_cache)
++        if rate is not None:
++            summary.valued_hours += entry.hours
++            summary.wip_value += money(entry.hours * rate)
++        else:
++            summary.unrated_hours += entry.hours
++
++    return summary
++
++
++@dataclass
++class RealizationRow:
++    key: str
++    label: str
++    worked_value: Decimal = Decimal("0.00")
++    billed_value: Decimal = Decimal("0.00")
++    worked_hours: Decimal = Decimal("0.00")
++
++    @property
++    def realization_rate(self) -> Decimal | None:
++        if self.worked_value == 0:
++            return None
++        return (self.billed_value / self.worked_value).quantize(Decimal("0.0001"))
++
++
++def compute_realization(
++    db: Session,
++    *,
++    group_by: str,
++    start_date: date_type | None,
++    end_date: date_type | None,
++    project_id: int | None = None,
++    department_by_project: dict[int, tuple[int, str] | None] | None = None,
++) -> list[RealizationRow]:
++    """Realization rate = billed value / worked value, grouped by
++    engagement (project), partner (engagement_partner_email), or
++    department. 'Worked value' is time-entry hours valued via
++    resolve_rate over the period; 'billed value' is the amount actually
++    invoiced (excluding void invoices) for line items tied to time entries
++    logged in that same period -- so a rate always compares like to like
++    (work done in the window vs. what that specific work billed for, not
++    whatever happened to be invoiced in the window).
++    """
++    from app.models.project import Project  # local import: avoids a cycle with department_scope
++
++    query = db.query(TimeEntry).filter(TimeEntry.deleted_at.is_(None), TimeEntry.billable.is_(True))
++    if project_id is not None:
++        query = query.filter(TimeEntry.project_id == project_id)
++    if start_date is not None:
++        query = query.filter(TimeEntry.entry_date >= start_date)
++    if end_date is not None:
++        query = query.filter(TimeEntry.entry_date <= end_date)
++    entries = query.all()
++
++    if not entries:
++        return []
++
++    project_ids = {e.project_id for e in entries}
++    projects = {p.id: p for p in db.query(Project).filter(Project.id.in_(project_ids)).all()}
++
++    # Preload billed amounts for line items tied to these entries in one query.
++    entry_ids = [e.id for e in entries]
++    billed_by_entry: dict[int, Decimal] = {}
++    if entry_ids:
++        rows = (
++            db.query(InvoiceLineItem.id, InvoiceLineItem.amount, TimeEntry.id)
++            .join(TimeEntry, TimeEntry.invoice_line_item_id == InvoiceLineItem.id)
++            .join(Invoice, Invoice.id == InvoiceLineItem.invoice_id)
++            .filter(TimeEntry.id.in_(entry_ids), Invoice.status != "void", Invoice.deleted_at.is_(None))
++            .all()
++        )
++        for _line_item_id, amount, time_entry_id in rows:
++            billed_by_entry[time_entry_id] = (billed_by_entry.get(time_entry_id) or Decimal("0")) + (amount or Decimal("0"))
++
++    rate_cache: dict[int, Decimal | None] = {}
++    rows_by_key: dict[str, RealizationRow] = {}
++
++    for entry in entries:
++        project = projects.get(entry.project_id)
++        if project is None:
++            continue
++
++        if group_by == "project":
++            key, label = str(project.id), project.name
++        elif group_by == "partner":
++            key = project.engagement_partner_email or "unassigned"
++            label = project.engagement_partner_name or "Unassigned"
++        elif group_by == "department":
++            dept = (department_by_project or {}).get(project.id)
++            key = str(dept[0]) if dept else "unassigned"
++            label = dept[1] if dept else "Unassigned"
++        else:
++            key, label = str(project.id), project.name
++
++        row = rows_by_key.setdefault(key, RealizationRow(key=key, label=label))
++        row.worked_hours += entry.hours
++
++        rate = resolve_rate(db, entry, project_rate_cache=rate_cache)
++        if rate is not None:
++            row.worked_value += money(entry.hours * rate)
++
++        if entry.id in billed_by_entry:
++            row.billed_value += billed_by_entry[entry.id]
++
++    return sorted(rows_by_key.values(), key=lambda r: r.label.lower())
+diff --git a/backend/app/db/base.py b/backend/app/db/base.py
+index 077a3bd..4f23303 100644
+--- a/backend/app/db/base.py
++++ b/backend/app/db/base.py
+@@ -16,6 +16,7 @@ from app.models.task_dependency import TaskDependency
+ from app.models.task_template import TaskTemplate, TaskTemplateItem
+ from app.models.milestone import Milestone
+ from app.models.time_entry import TimeEntry
++from app.models.invoice import Invoice, InvoiceLineItem
+ from app.models.notification import Notification
+ from app.models.comment import Comment
+ from app.models.sent_email import SentEmail
+diff --git a/backend/app/main.py b/backend/app/main.py
+index bb1e1cf..a1fa5a4 100644
+--- a/backend/app/main.py
++++ b/backend/app/main.py
+@@ -12,6 +12,7 @@ from app.routes.comments import router as comments_router
+ from app.routes.contracts import router as contracts_router
+ from app.routes.departments import router as departments_router
+ from app.routes.files import router as files_router
++from app.routes.invoices import router as invoices_router
+ from app.routes.leave_requests import router as leave_requests_router
+ from app.routes.milestones import router as milestones_router
+ from app.routes.notifications import router as notifications_router
+@@ -62,6 +63,7 @@ app.include_router(milestones_router)
+ app.include_router(contracts_router)
+ app.include_router(change_orders_router)
+ app.include_router(time_entries_router)
++app.include_router(invoices_router)
+ app.include_router(notifications_router)
+ app.include_router(comments_router)
+ app.include_router(search_router)
+diff --git a/backend/app/models/invoice.py b/backend/app/models/invoice.py
+new file mode 100644
+index 0000000..8e51626
+--- /dev/null
++++ b/backend/app/models/invoice.py
+@@ -0,0 +1,75 @@
++from app.core.time import utcnow
++
++from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, Numeric, String, Text
++from app.db.session import Base
++
++
++class Invoice(Base):
++    """A bill sent to a client for work done on an engagement. Generated
++    from WIP (uninvoiced billable time entries -- see TimeEntry) plus any
++    manual/fixed-fee line items, an invoice is the missing link between
++    time tracked and revenue actually captured: Project.budget and
++    Contract.value tell you what work was scoped, TimeEntry tells you what
++    was worked, and Invoice tells you what was billed. Realization rate
++    (billed vs. worked) is derived by comparing invoice totals against the
++    value of time entries over the same period -- see app.core.billing.
++    """
++
++    __tablename__ = "invoices"
++
++    id = Column(Integer, primary_key=True, index=True)
++    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
++    contract_id = Column(Integer, ForeignKey("contracts.id"), nullable=True, index=True)
++
++    # Human-facing identifier, assigned once at creation (INV-{year}-{id}).
++    # Kept as a separate column (rather than derived at read time) so it
++    # never changes even if numbering conventions change later.
++    invoice_number = Column(String(50), nullable=False, unique=True, index=True)
++
++    # draft | sent | paid | void
++    # (an invoice past due_date with status="sent" is "overdue" -- derived
++    # at read time from due_date rather than stored, so it can't go stale)
++    status = Column(String(20), nullable=False, default="draft", index=True)
++
++    issue_date = Column(Date, nullable=False)
++    due_date = Column(Date, nullable=True)
++
++    subtotal = Column(Numeric(12, 2), nullable=False, default=0)
++    tax_amount = Column(Numeric(12, 2), nullable=False, default=0)
++    total_amount = Column(Numeric(12, 2), nullable=False, default=0)
++
++    amount_paid = Column(Numeric(12, 2), nullable=False, default=0)
++    paid_date = Column(Date, nullable=True)
++
++    notes = Column(Text, nullable=True)
++    void_reason = Column(Text, nullable=True)
++
++    created_by_email = Column(String(255), nullable=False)
++    created_by_name = Column(String(255), nullable=False)
++
++    created_at = Column(DateTime, default=utcnow)
++    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
++    deleted_at = Column(DateTime, nullable=True, index=True)
++
++
++class InvoiceLineItem(Base):
++    """A single billed line on an invoice. Either tied to a specific
++    TimeEntry (a time-based line, the normal case) or a manual line with no
++    time_entry_id (a fixed-fee milestone billing, a flat adjustment, an
++    expense reimbursement, etc.). rate/hours/amount are snapshotted at
++    invoice-generation time so a later change to a user's standard rate or
++    a contract's hourly_rate never rewrites the amount on an
++    already-issued invoice.
++    """
++
++    __tablename__ = "invoice_line_items"
++
++    id = Column(Integer, primary_key=True, index=True)
++    invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=False, index=True)
++
++    description = Column(String(500), nullable=False)
++    hours = Column(Numeric(6, 2), nullable=True)
++    rate = Column(Numeric(10, 2), nullable=True)
++    amount = Column(Numeric(12, 2), nullable=False)
++
++    created_at = Column(DateTime, default=utcnow)
+diff --git a/backend/app/models/time_entry.py b/backend/app/models/time_entry.py
+index a92a2df..c6eae56 100644
+--- a/backend/app/models/time_entry.py
++++ b/backend/app/models/time_entry.py
+@@ -26,6 +26,14 @@ class TimeEntry(Base):
+     billable = Column(Boolean, nullable=False, default=True, index=True)
+     notes = Column(Text, nullable=True)
+ 
++    # Set once this entry has been pulled onto an invoice (see
++    # InvoiceLineItem). Null + billable=True is exactly the definition of
++    # "in WIP" -- worked, billable, not yet billed. Voiding or deleting the
++    # invoice clears this back to null so the hours return to WIP.
++    invoice_line_item_id = Column(
++        Integer, ForeignKey("invoice_line_items.id"), nullable=True, index=True
++    )
++
+     created_at = Column(DateTime, default=utcnow)
+     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+     deleted_at = Column(DateTime, nullable=True, index=True)
+diff --git a/backend/app/models/user.py b/backend/app/models/user.py
+index 7021262..d5ae4c0 100644
+--- a/backend/app/models/user.py
++++ b/backend/app/models/user.py
+@@ -1,6 +1,6 @@
+ from app.core.time import utcnow
+ 
+-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
++from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String
+ 
+ from app.db.session import Base
+ 
+@@ -34,6 +34,14 @@ class User(Base):
+     position = Column(String(30), nullable=True, index=True)
+     manager_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+ 
++    # Standard hourly billing rate used to value WIP (work-in-progress) and
++    # compute realization rates when the engagement's contract doesn't
++    # itself carry an hourly rate (e.g. a fixed_fee contract still needs a
++    # "value of hours worked" figure to measure billed-vs-worked against).
++    # A contract-level hourly_rate, when present, always takes precedence
++    # over this for rate resolution -- see app.core.billing.
++    standard_billing_rate = Column(Numeric(10, 2), nullable=True)
++
+     # Email verification
+     is_verified = Column(Boolean, nullable=False, default=False)
+     verification_token = Column(String(255), nullable=True, index=True)
+diff --git a/backend/app/routes/invoices.py b/backend/app/routes/invoices.py
+new file mode 100644
+index 0000000..42e5231
+--- /dev/null
++++ b/backend/app/routes/invoices.py
+@@ -0,0 +1,434 @@
++from datetime import date as date_type
++from decimal import Decimal
++
++from fastapi import APIRouter, Depends, HTTPException, Query, Response
++from sqlalchemy.orm import Session
++
++from app.core.activity_logger import log_activity
++from app.core.billing import compute_wip, money, resolve_rate
++from app.core.deps import get_current_active_user
++from app.core.department_scope import department_id_for_project, require_scoped_write
++from app.core.time import utcnow
++from app.db.session import get_db
++from app.models.contract import Contract
++from app.models.invoice import Invoice, InvoiceLineItem
++from app.models.project import Project
++from app.models.time_entry import TimeEntry
++from app.schemas.invoice import (
++    InvoiceCreate,
++    InvoiceLineItemOut,
++    InvoiceOut,
++    InvoiceRecordPayment,
++    InvoiceUpdate,
++    InvoiceVoid,
++    WipSummaryOut,
++)
++from app.schemas.user import UserPublic
++
++router = APIRouter(prefix="/invoices", tags=["Billing & Invoicing"])
++
++DEFAULT_PAGE_LIMIT = 100
++MAX_PAGE_LIMIT = 200
++VALID_STATUSES = {"draft", "sent", "paid", "void"}
++
++
++def _serialize(db: Session, invoice: Invoice) -> InvoiceOut:
++    """InvoiceLineItemOut wants time_entry_id, which lives on TimeEntry
++    (the FK points line-item -> entry the other way for WIP-release
++    reasons -- see TimeEntry.invoice_line_item_id), so it's resolved here
++    rather than via a plain from_attributes pass."""
++    line_items = (
++        db.query(InvoiceLineItem).filter(InvoiceLineItem.invoice_id == invoice.id).order_by(InvoiceLineItem.id).all()
++    )
++    entry_by_line_item = {
++        te.invoice_line_item_id: te.id
++        for te in db.query(TimeEntry.id, TimeEntry.invoice_line_item_id)
++        .filter(TimeEntry.invoice_line_item_id.in_([li.id for li in line_items]))
++        .all()
++    } if line_items else {}
++
++    out = InvoiceOut.model_validate(invoice)
++    out.line_items = [
++        InvoiceLineItemOut(
++            id=li.id,
++            invoice_id=li.invoice_id,
++            description=li.description,
++            hours=li.hours,
++            rate=li.rate,
++            amount=li.amount,
++            time_entry_id=entry_by_line_item.get(li.id),
++        )
++        for li in line_items
++    ]
++    return out
++
++
++def _next_invoice_number(db: Session, issue_date: date_type) -> str:
++    year = issue_date.year
++    count = db.query(Invoice).filter(Invoice.invoice_number.like(f"INV-{year}-%")).count()
++    return f"INV-{year}-{count + 1:05d}"
++
++
++@router.get("/", response_model=list[InvoiceOut])
++def list_invoices(
++    response: Response,
++    project_id: int | None = Query(default=None),
++    contract_id: int | None = Query(default=None),
++    status: str | None = Query(default=None),
++    skip: int = Query(default=0, ge=0),
++    limit: int = Query(default=DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
++    db: Session = Depends(get_db),
++    current_user: UserPublic = Depends(get_current_active_user),
++):
++    query = db.query(Invoice).filter(Invoice.deleted_at.is_(None))
++    if project_id is not None:
++        query = query.filter(Invoice.project_id == project_id)
++    if contract_id is not None:
++        query = query.filter(Invoice.contract_id == contract_id)
++    if status:
++        query = query.filter(Invoice.status == status)
++
++    response.headers["X-Total-Count"] = str(query.count())
++    invoices = query.order_by(Invoice.issue_date.desc(), Invoice.id.desc()).offset(skip).limit(limit).all()
++    return [_serialize(db, inv) for inv in invoices]
++
++
++@router.get("/wip", response_model=WipSummaryOut)
++def get_wip(
++    project_id: int = Query(...),
++    db: Session = Depends(get_db),
++    current_user: UserPublic = Depends(get_current_active_user),
++):
++    """Work-in-progress for a single engagement: billable hours logged but
++    not yet invoiced, and their dollar value at resolved rates."""
++    project = db.query(Project).filter(Project.id == project_id, Project.deleted_at.is_(None)).first()
++    if not project:
++        raise HTTPException(status_code=404, detail="Project not found")
++
++    summary = compute_wip(db, project_id)
++    return WipSummaryOut(
++        project_id=summary.project_id,
++        total_hours=summary.total_hours,
++        valued_hours=summary.valued_hours,
++        unrated_hours=summary.unrated_hours,
++        wip_value=summary.wip_value,
++        entry_count=summary.entry_count,
++    )
++
++
++@router.post("/", response_model=InvoiceOut)
++def create_invoice(
++    payload: InvoiceCreate,
++    db: Session = Depends(get_db),
++    current_user: UserPublic = Depends(get_current_active_user),
++):
++    """Generates a draft invoice from WIP time entries (explicit selection,
++    or every uninvoiced billable entry on the project when time_entry_ids
++    is omitted) plus any manual line items, e.g. a fixed-fee milestone
++    billing. Selected time entries are locked to this invoice's line
++    items immediately, removing them from WIP."""
++    project = db.query(Project).filter(Project.id == payload.project_id, Project.deleted_at.is_(None)).first()
++    if not project:
++        raise HTTPException(status_code=404, detail="Project not found")
++
++    if payload.contract_id is not None:
++        contract = (
++            db.query(Contract)
++            .filter(Contract.id == payload.contract_id, Contract.deleted_at.is_(None))
++            .first()
++        )
++        if not contract or contract.project_id != project.id:
++            raise HTTPException(status_code=404, detail="Contract not found for this project")
++
++    require_scoped_write(db, current_user, department_id_for_project(db, project.id))
++
++    if payload.time_entry_ids is None:
++        entries = (
++            db.query(TimeEntry)
++            .filter(
++                TimeEntry.project_id == project.id,
++                TimeEntry.deleted_at.is_(None),
++                TimeEntry.billable.is_(True),
++                TimeEntry.invoice_line_item_id.is_(None),
++            )
++            .all()
++        )
++    elif payload.time_entry_ids:
++        entries = (
++            db.query(TimeEntry)
++            .filter(TimeEntry.id.in_(payload.time_entry_ids), TimeEntry.deleted_at.is_(None))
++            .all()
++        )
++        found_ids = {e.id for e in entries}
++        missing = set(payload.time_entry_ids) - found_ids
++        if missing:
++            raise HTTPException(status_code=404, detail=f"Time entries not found: {sorted(missing)}")
++        for entry in entries:
++            if entry.project_id != project.id:
++                raise HTTPException(
++                    status_code=400, detail=f"Time entry {entry.id} does not belong to project {project.id}"
++                )
++            if entry.invoice_line_item_id is not None:
++                raise HTTPException(status_code=400, detail=f"Time entry {entry.id} is already invoiced")
++    else:
++        entries = []
++
++    if not entries and not payload.manual_line_items:
++        raise HTTPException(status_code=400, detail="No billable time entries or manual line items to invoice")
++
++    issue_date = utcnow().date()
++    invoice = Invoice(
++        project_id=project.id,
++        contract_id=payload.contract_id,
++        invoice_number=_next_invoice_number(db, issue_date),
++        status="draft",
++        issue_date=issue_date,
++        due_date=payload.due_date,
++        subtotal=Decimal("0"),
++        tax_amount=payload.tax_amount or Decimal("0"),
++        total_amount=Decimal("0"),
++        amount_paid=Decimal("0"),
++        notes=payload.notes,
++        created_by_email=current_user.email,
++        created_by_name=current_user.name,
++    )
++    db.add(invoice)
++    db.flush()  # assign invoice.id without committing yet
++
++    subtotal = Decimal("0")
++    rate_cache: dict[int, Decimal | None] = {}
++
++    for entry in entries:
++        rate = resolve_rate(db, entry, project_rate_cache=rate_cache)
++        amount = money(entry.hours * rate) if rate is not None else Decimal("0")
++        line_item = InvoiceLineItem(
++            invoice_id=invoice.id,
++            description=f"{entry.entry_date.isoformat()} - {entry.user_name}" + (f": {entry.notes}" if entry.notes else ""),
++            hours=entry.hours,
++            rate=rate,
++            amount=amount,
++        )
++        db.add(line_item)
++        db.flush()
++        entry.invoice_line_item_id = line_item.id
++        subtotal += amount
++
++    for manual in payload.manual_line_items:
++        line_item = InvoiceLineItem(
++            invoice_id=invoice.id,
++            description=manual.description,
++            hours=manual.hours,
++            rate=manual.rate,
++            amount=manual.amount,
++        )
++        db.add(line_item)
++        subtotal += manual.amount
++
++    invoice.subtotal = subtotal
++    invoice.total_amount = subtotal + (invoice.tax_amount or Decimal("0"))
++
++    db.commit()
++    db.refresh(invoice)
++
++    log_activity(
++        db=db,
++        user=current_user,
++        action="invoice_created",
++        entity_type="invoice",
++        entity_id=invoice.id,
++        title=f"Invoice {invoice.invoice_number} created",
++        description=f"Draft invoice {invoice.invoice_number} generated for '{project.name}' totaling {invoice.total_amount}.",
++    )
++
++    return _serialize(db, invoice)
++
++
++@router.get("/{invoice_id}", response_model=InvoiceOut)
++def get_invoice(
++    invoice_id: int,
++    db: Session = Depends(get_db),
++    current_user: UserPublic = Depends(get_current_active_user),
++):
++    invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.deleted_at.is_(None)).first()
++    if not invoice:
++        raise HTTPException(status_code=404, detail="Invoice not found")
++    return _serialize(db, invoice)
++
++
++@router.patch("/{invoice_id}", response_model=InvoiceOut)
++def update_invoice(
++    invoice_id: int,
++    payload: InvoiceUpdate,
++    db: Session = Depends(get_db),
++    current_user: UserPublic = Depends(get_current_active_user),
++):
++    invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.deleted_at.is_(None)).first()
++    if not invoice:
++        raise HTTPException(status_code=404, detail="Invoice not found")
++    if invoice.status != "draft":
++        raise HTTPException(status_code=400, detail="Only draft invoices can be edited")
++
++    require_scoped_write(db, current_user, department_id_for_project(db, invoice.project_id))
++
++    updates = payload.model_dump(exclude_unset=True)
++    if "tax_amount" in updates and updates["tax_amount"] is not None:
++        invoice.tax_amount = updates["tax_amount"]
++        invoice.total_amount = invoice.subtotal + invoice.tax_amount
++    if "due_date" in updates:
++        invoice.due_date = updates["due_date"]
++    if "notes" in updates:
++        invoice.notes = updates["notes"]
++
++    db.commit()
++    db.refresh(invoice)
++    return _serialize(db, invoice)
++
++
++@router.post("/{invoice_id}/send", response_model=InvoiceOut)
++def send_invoice(
++    invoice_id: int,
++    db: Session = Depends(get_db),
++    current_user: UserPublic = Depends(get_current_active_user),
++):
++    invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.deleted_at.is_(None)).first()
++    if not invoice:
++        raise HTTPException(status_code=404, detail="Invoice not found")
++    if invoice.status != "draft":
++        raise HTTPException(status_code=400, detail="Only draft invoices can be sent")
++
++    require_scoped_write(db, current_user, department_id_for_project(db, invoice.project_id))
++
++    invoice.status = "sent"
++    db.commit()
++    db.refresh(invoice)
++
++    log_activity(
++        db=db,
++        user=current_user,
++        action="invoice_sent",
++        entity_type="invoice",
++        entity_id=invoice.id,
++        title=f"Invoice {invoice.invoice_number} sent",
++        description=f"Invoice {invoice.invoice_number} marked as sent to client, total {invoice.total_amount}.",
++    )
++
++    return _serialize(db, invoice)
++
++
++@router.post("/{invoice_id}/record-payment", response_model=InvoiceOut)
++def record_payment(
++    invoice_id: int,
++    payload: InvoiceRecordPayment,
++    db: Session = Depends(get_db),
++    current_user: UserPublic = Depends(get_current_active_user),
++):
++    invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.deleted_at.is_(None)).first()
++    if not invoice:
++        raise HTTPException(status_code=404, detail="Invoice not found")
++    if invoice.status not in ("sent", "paid"):
++        raise HTTPException(status_code=400, detail="Only sent invoices can receive a payment")
++    if payload.amount_paid <= 0:
++        raise HTTPException(status_code=400, detail="amount_paid must be greater than 0")
++
++    require_scoped_write(db, current_user, department_id_for_project(db, invoice.project_id))
++
++    invoice.amount_paid = (invoice.amount_paid or Decimal("0")) + payload.amount_paid
++    invoice.paid_date = payload.paid_date or utcnow().date()
++    if invoice.amount_paid >= invoice.total_amount:
++        invoice.status = "paid"
++
++    db.commit()
++    db.refresh(invoice)
++
++    log_activity(
++        db=db,
++        user=current_user,
++        action="invoice_payment_recorded",
++        entity_type="invoice",
++        entity_id=invoice.id,
++        title=f"Payment recorded for {invoice.invoice_number}",
++        description=f"Recorded payment of {payload.amount_paid} against invoice {invoice.invoice_number} (total paid {invoice.amount_paid} of {invoice.total_amount}).",
++    )
++
++    return _serialize(db, invoice)
++
++
++@router.post("/{invoice_id}/void", response_model=InvoiceOut)
++def void_invoice(
++    invoice_id: int,
++    payload: InvoiceVoid = InvoiceVoid(),
++    db: Session = Depends(get_db),
++    current_user: UserPublic = Depends(get_current_active_user),
++):
++    """Voiding releases every time entry tied to this invoice's line items
++    back into WIP (invoice_line_item_id cleared), so the work can be
++    re-billed on a corrected invoice."""
++    invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.deleted_at.is_(None)).first()
++    if not invoice:
++        raise HTTPException(status_code=404, detail="Invoice not found")
++    if invoice.status == "void":
++        raise HTTPException(status_code=400, detail="Invoice is already void")
++    if invoice.amount_paid and invoice.amount_paid > 0:
++        raise HTTPException(status_code=400, detail="Cannot void an invoice with a recorded payment")
++
++    require_scoped_write(db, current_user, department_id_for_project(db, invoice.project_id))
++
++    line_item_ids = [li.id for li in db.query(InvoiceLineItem.id).filter(InvoiceLineItem.invoice_id == invoice.id).all()]
++    if line_item_ids:
++        db.query(TimeEntry).filter(TimeEntry.invoice_line_item_id.in_(line_item_ids)).update(
++            {TimeEntry.invoice_line_item_id: None}, synchronize_session=False
++        )
++
++    invoice.status = "void"
++    invoice.void_reason = payload.reason
++    db.commit()
++    db.refresh(invoice)
++
++    log_activity(
++        db=db,
++        user=current_user,
++        action="invoice_voided",
++        entity_type="invoice",
++        entity_id=invoice.id,
++        title=f"Invoice {invoice.invoice_number} voided",
++        description=f"Voided invoice {invoice.invoice_number}, releasing its time entries back to WIP."
++        + (f" Reason: {payload.reason}" if payload.reason else ""),
++    )
++
++    return _serialize(db, invoice)
++
++
++@router.delete("/{invoice_id}")
++def delete_invoice(
++    invoice_id: int,
++    db: Session = Depends(get_db),
++    current_user: UserPublic = Depends(get_current_active_user),
++):
++    invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.deleted_at.is_(None)).first()
++    if not invoice:
++        raise HTTPException(status_code=404, detail="Invoice not found")
++    if invoice.status != "draft":
++        raise HTTPException(status_code=400, detail="Only draft invoices can be deleted; void a sent invoice instead")
++
++    require_scoped_write(db, current_user, department_id_for_project(db, invoice.project_id))
++
++    line_item_ids = [li.id for li in db.query(InvoiceLineItem.id).filter(InvoiceLineItem.invoice_id == invoice.id).all()]
++    if line_item_ids:
++        db.query(TimeEntry).filter(TimeEntry.invoice_line_item_id.in_(line_item_ids)).update(
++            {TimeEntry.invoice_line_item_id: None}, synchronize_session=False
++        )
++
++    invoice.deleted_at = utcnow()
++    db.commit()
++
++    log_activity(
++        db=db,
++        user=current_user,
++        action="invoice_deleted",
++        entity_type="invoice",
++        entity_id=invoice_id,
++        title=f"Invoice {invoice.invoice_number} deleted",
++        description="Draft invoice removed (soft delete); its time entries returned to WIP.",
++    )
++
++    return {"message": "Invoice deleted successfully"}
+diff --git a/backend/app/routes/reports.py b/backend/app/routes/reports.py
+index 023d36f..85f7014 100644
+--- a/backend/app/routes/reports.py
++++ b/backend/app/routes/reports.py
+@@ -1,6 +1,7 @@
+ import csv
+ import io
+-from datetime import timedelta
++from datetime import date as date_type, timedelta
++from decimal import Decimal
+ 
+ from fastapi import APIRouter, Depends, HTTPException, Query
+ from fastapi.responses import StreamingResponse
+@@ -8,6 +9,7 @@ from fpdf import FPDF
+ from sqlalchemy import case, func
+ from sqlalchemy.orm import Session
+ 
++from app.core.billing import compute_realization, money
+ from app.core.client_health import compute_client_health
+ from app.core.deps import get_current_active_user
+ from app.core.time import utcnow
+@@ -15,6 +17,7 @@ from app.db.session import get_db
+ from app.models.activity_log import ActivityLog
+ from app.models.client import Client
+ from app.models.contract import Contract
++from app.models.department import Department
+ from app.models.file_record import FileRecord
+ from app.models.milestone import Milestone
+ from app.models.project import Project
+@@ -22,6 +25,7 @@ from app.models.project_assignment import ProjectAssignment
+ from app.models.task import Task
+ from app.models.time_entry import TimeEntry
+ from app.models.user import User
++from app.schemas.invoice import RealizationReportOut
+ from app.schemas.user import UserPublic
+ 
+ router = APIRouter(prefix="/reports", tags=["Reports"])
+@@ -530,3 +534,64 @@ def capacity_dashboard(
+         "bench_count": sum(1 for p in people if p["status"] == "bench"),
+         "people": people,
+     }
++
++
++@router.get("/realization", response_model=RealizationReportOut)
++def realization_report(
++    group_by: str = Query(default="project", pattern="^(project|partner|department)$"),
++    project_id: int | None = Query(default=None),
++    start_date: date_type | None = Query(default=None),
++    end_date: date_type | None = Query(default=None),
++    db: Session = Depends(get_db),
++    current_user: UserPublic = Depends(get_current_active_user),
++):
++    """Realization rate = billed value / worked value over the period,
++    rolled up by engagement, partner, or department. This is the
++    headline "are we actually capturing the revenue our people are
++    generating" number -- a rate well under 100% means work is being done
++    that never turns into an invoice.
++    """
++    department_by_project = None
++    if group_by == "department":
++        rows = (
++            db.query(Project.id, Client.department_id, Department.name)
++            .join(Client, Project.client_id == Client.id)
++            .outerjoin(Department, Client.department_id == Department.id)
++            .all()
++        )
++        department_by_project = {
++            project_id_: ((dept_id, dept_name) if dept_id is not None else None)
++            for project_id_, dept_id, dept_name in rows
++        }
++
++    result_rows = compute_realization(
++        db,
++        group_by=group_by,
++        start_date=start_date,
++        end_date=end_date,
++        project_id=project_id,
++        department_by_project=department_by_project,
++    )
++
++    firm_worked = sum((r.worked_value for r in result_rows), Decimal("0.00"))
++    firm_billed = sum((r.billed_value for r in result_rows), Decimal("0.00"))
++
++    return {
++        "group_by": group_by,
++        "start_date": start_date,
++        "end_date": end_date,
++        "firm_worked_value": firm_worked,
++        "firm_billed_value": firm_billed,
++        "firm_realization_rate": (firm_billed / firm_worked).quantize(Decimal("0.0001")) if firm_worked else None,
++        "rows": [
++            {
++                "key": r.key,
++                "label": r.label,
++                "worked_hours": r.worked_hours,
++                "worked_value": r.worked_value,
++                "billed_value": r.billed_value,
++                "realization_rate": r.realization_rate,
++            }
++            for r in result_rows
++        ],
++    }
+diff --git a/backend/app/routes/users.py b/backend/app/routes/users.py
+index 33d9332..48e8c76 100644
+--- a/backend/app/routes/users.py
++++ b/backend/app/routes/users.py
+@@ -8,6 +8,7 @@ from app.db.session import get_db
+ from app.models.user import POSITION_LEVELS, User
+ from app.schemas.user import UserPublic
+ from app.schemas.user_management import (
++    UserBillingRateUpdate,
+     UserCreate,
+     UserDepartmentUpdate,
+     UserManagementOut,
+@@ -237,6 +238,39 @@ def update_user_position(
+     return target
+ 
+ 
++@router.patch("/{email}/billing-rate", response_model=UserManagementOut)
++def update_user_billing_rate(
++    email: str,
++    payload: UserBillingRateUpdate,
++    db: Session = Depends(get_db),
++    current_user: UserPublic = Depends(require_role("admin")),
++):
++    """Sets the standard hourly rate used to value this user's time when a
++    project's contract doesn't itself carry an hourly_rate -- see
++    app.core.billing.resolve_rate."""
++    target = get_user_by_email(db, email.lower())
++
++    if not target:
++        raise HTTPException(status_code=404, detail="User not found")
++
++    target.standard_billing_rate = payload.standard_billing_rate
++
++    db.commit()
++    db.refresh(target)
++
++    log_activity(
++        db=db,
++        user=current_user,
++        action="user_billing_rate_updated",
++        entity_type="user",
++        entity_id=target.id,
++        title=f"Billing rate updated: {target.name}",
++        description=f"Set standard billing rate to {target.standard_billing_rate} for '{target.email}'.",
++    )
++
++    return target
++
++
+ @router.get("/org-chart")
+ def get_org_chart(
+     db: Session = Depends(get_db),
+diff --git a/backend/app/schemas/invoice.py b/backend/app/schemas/invoice.py
+new file mode 100644
+index 0000000..f69f14c
+--- /dev/null
++++ b/backend/app/schemas/invoice.py
+@@ -0,0 +1,116 @@
++from datetime import date, datetime
++from decimal import Decimal
++from typing import Optional
++
++from pydantic import BaseModel, Field, model_validator
++
++
++class ManualLineItemInput(BaseModel):
++    """A non-time-based line, e.g. a fixed-fee milestone billing or an
++    expense reimbursement."""
++
++    description: str
++    amount: Decimal
++    hours: Optional[Decimal] = None
++    rate: Optional[Decimal] = None
++
++
++class InvoiceCreate(BaseModel):
++    project_id: int
++    contract_id: Optional[int] = None
++    due_date: Optional[date] = None
++    notes: Optional[str] = None
++    tax_amount: Optional[Decimal] = Decimal("0")
++
++    # Explicit selection of WIP time entries to bill. If omitted entirely
++    # (None), every currently-uninvoiced billable time entry on the
++    # project is pulled in -- "bill everything in WIP". Pass an empty list
++    # to generate an invoice with only manual_line_items and no time-based
++    # lines at all.
++    time_entry_ids: Optional[list[int]] = None
++    manual_line_items: list[ManualLineItemInput] = Field(default_factory=list)
++
++    @model_validator(mode="after")
++    def at_least_one_source(self):
++        if self.time_entry_ids == [] and not self.manual_line_items:
++            raise ValueError("Provide at least one time entry or manual line item")
++        return self
++
++
++class InvoiceUpdate(BaseModel):
++    due_date: Optional[date] = None
++    notes: Optional[str] = None
++    tax_amount: Optional[Decimal] = None
++
++
++class InvoiceRecordPayment(BaseModel):
++    amount_paid: Decimal
++    paid_date: Optional[date] = None
++
++
++class InvoiceVoid(BaseModel):
++    reason: Optional[str] = None
++
++
++class InvoiceLineItemOut(BaseModel):
++    id: int
++    invoice_id: int
++    description: str
++    hours: Optional[Decimal] = None
++    rate: Optional[Decimal] = None
++    amount: Decimal
++    time_entry_id: Optional[int] = None
++
++    model_config = {"from_attributes": True}
++
++
++class InvoiceOut(BaseModel):
++    id: int
++    project_id: int
++    contract_id: Optional[int] = None
++    invoice_number: str
++    status: str
++    issue_date: date
++    due_date: Optional[date] = None
++    subtotal: Decimal
++    tax_amount: Decimal
++    total_amount: Decimal
++    amount_paid: Decimal
++    paid_date: Optional[date] = None
++    notes: Optional[str] = None
++    void_reason: Optional[str] = None
++    created_by_email: str
++    created_by_name: str
++    created_at: datetime
++    updated_at: datetime
++    line_items: list[InvoiceLineItemOut] = Field(default_factory=list)
++
++    model_config = {"from_attributes": True}
++
++
++class WipSummaryOut(BaseModel):
++    project_id: int
++    total_hours: Decimal
++    valued_hours: Decimal
++    unrated_hours: Decimal
++    wip_value: Decimal
++    entry_count: int
++
++
++class RealizationRowOut(BaseModel):
++    key: str
++    label: str
++    worked_hours: Decimal
++    worked_value: Decimal
++    billed_value: Decimal
++    realization_rate: Optional[Decimal] = None
++
++
++class RealizationReportOut(BaseModel):
++    group_by: str
++    start_date: Optional[date] = None
++    end_date: Optional[date] = None
++    firm_worked_value: Decimal
++    firm_billed_value: Decimal
++    firm_realization_rate: Optional[Decimal] = None
++    rows: list[RealizationRowOut] = Field(default_factory=list)
+diff --git a/backend/app/schemas/time_entry.py b/backend/app/schemas/time_entry.py
+index e8e6b74..351d281 100644
+--- a/backend/app/schemas/time_entry.py
++++ b/backend/app/schemas/time_entry.py
+@@ -60,6 +60,7 @@ class TimeEntryOut(BaseModel):
+     entry_date: date
+     billable: bool
+     notes: Optional[str] = None
++    invoice_line_item_id: Optional[int] = None
+     created_at: datetime
+     updated_at: datetime
+ 
+diff --git a/backend/app/schemas/user_management.py b/backend/app/schemas/user_management.py
+index c53c268..ae7ac93 100644
+--- a/backend/app/schemas/user_management.py
++++ b/backend/app/schemas/user_management.py
+@@ -1,3 +1,5 @@
++from decimal import Decimal
++
+ from pydantic import BaseModel, EmailStr
+ 
+ class UserCreate(BaseModel):
+@@ -30,6 +32,9 @@ class UserPositionUpdate(BaseModel):
+     position: str | None = None
+     manager_id: int | None = None
+ 
++class UserBillingRateUpdate(BaseModel):
++    standard_billing_rate: Decimal | None = None
++
+ class UserManagementOut(BaseModel):
+     id: int
+     name: str
+@@ -40,5 +45,6 @@ class UserManagementOut(BaseModel):
+     position: str | None = None
+     manager_id: int | None = None
+     is_verified: bool = False
++    standard_billing_rate: Decimal | None = None
+ 
+     model_config = {"from_attributes": True}
+\ No newline at end of file
+diff --git a/backend/tests/test_invoices.py b/backend/tests/test_invoices.py
+new file mode 100644
+index 0000000..521443e
+--- /dev/null
++++ b/backend/tests/test_invoices.py
+@@ -0,0 +1,468 @@
++from tests.conftest import STAFF_EMAIL
++from tests.test_contracts import _create_contract
++from tests.test_department_kpis import _create_department, _create_user
++from tests.test_new_features import _create_client
++from tests.test_projects import _create_project
++from tests.test_time_entries import _create_time_entry
++
++
++def _setup_project(admin_client, email, **contract_overrides):
++    client = _create_client(admin_client, email=email)
++    project = _create_project(admin_client, client["id"])
++    contract = _create_contract(
++        admin_client,
++        project["id"],
++        billing_type="hourly",
++        hourly_rate="200.00",
++        value=None,
++        **contract_overrides,
++    )
++    return client, project, contract
++
++
++def _login_bearer(client, email, password="Sup3rSecret!"):
++    resp = client.post("/auth/login", data={"username": email, "password": password})
++    assert resp.status_code == 200, resp.text
++    return resp.json()["access_token"]
++
++
++def _auth_headers(client, email, password="Sup3rSecret!"):
++    return {"Authorization": f"Bearer {_login_bearer(client, email, password)}"}
++
++
++# --- Rate resolution & WIP --------------------------------------------------
++
++
++def test_wip_values_hours_at_contract_rate(admin_client):
++    _, project, _ = _setup_project(admin_client, "wip-contract-rate@example.com")
++    _create_time_entry(admin_client, project["id"], hours="3.0", billable=True)
++    _create_time_entry(admin_client, project["id"], hours="2.0", billable=False)  # non-billable excluded
++
++    resp = admin_client.get("/invoices/wip", params={"project_id": project["id"]})
++    assert resp.status_code == 200, resp.text
++    wip = resp.json()
++    assert wip["total_hours"] == "3.00"
++    assert wip["valued_hours"] == "3.00"
++    assert wip["unrated_hours"] == "0.00"
++    assert wip["wip_value"] == "600.00"
++    assert wip["entry_count"] == 1
++
++
++def test_wip_falls_back_to_user_standard_rate_without_contract_rate(admin_client):
++    client = _create_client(admin_client, email="wip-userrate@example.com")
++    project = _create_project(admin_client, client["id"])
++    # fixed_fee contract, no hourly_rate -> falls back to the logging user's rate
++    _create_contract(admin_client, project["id"], billing_type="fixed_fee", value="10000.00")
++
++    rated_user = _create_user(admin_client)
++    admin_resp = admin_client.patch(
++        f"/users/{rated_user['email']}/billing-rate", json={"standard_billing_rate": "150.00"}
++    )
++    assert admin_resp.status_code == 200, admin_resp.text
++
++    _create_time_entry(admin_client, project["id"], hours="4.0", billable=True, user_email=rated_user["email"])
++
++    resp = admin_client.get("/invoices/wip", params={"project_id": project["id"]})
++    wip = resp.json()
++    assert wip["wip_value"] == "600.00"
++
++
++def test_wip_marks_unrated_hours_when_no_rate_available(admin_client):
++    client = _create_client(admin_client, email="wip-unrated@example.com")
++    project = _create_project(admin_client, client["id"])
++    _create_contract(admin_client, project["id"], billing_type="fixed_fee", value="10000.00")
++    # admin user has no standard_billing_rate set and contract has no hourly_rate
++    _create_time_entry(admin_client, project["id"], hours="5.0", billable=True)
++
++    resp = admin_client.get("/invoices/wip", params={"project_id": project["id"]})
++    wip = resp.json()
++    assert wip["total_hours"] == "5.00"
++    assert wip["valued_hours"] == "0.00"
++    assert wip["unrated_hours"] == "5.00"
++    assert wip["wip_value"] == "0.00"
++
++
++def test_wip_requires_valid_project(admin_client):
++    resp = admin_client.get("/invoices/wip", params={"project_id": 999999})
++    assert resp.status_code == 404
++
++
++# --- Invoice generation -----------------------------------------------------
++
++
++def test_generate_invoice_from_all_wip(admin_client):
++    _, project, contract = _setup_project(admin_client, "inv-generate@example.com")
++    _create_time_entry(admin_client, project["id"], hours="3.0", billable=True)
++    _create_time_entry(admin_client, project["id"], hours="1.0", billable=True)
++    _create_time_entry(admin_client, project["id"], hours="2.0", billable=False)
++
++    resp = admin_client.post("/invoices/", json={"project_id": project["id"], "contract_id": contract["id"]})
++    assert resp.status_code == 200, resp.text
++    invoice = resp.json()
++
++    assert invoice["status"] == "draft"
++    assert invoice["subtotal"] == "800.00"  # 4 billable hours * 200
++    assert invoice["total_amount"] == "800.00"
++    assert len(invoice["line_items"]) == 2
++    assert invoice["invoice_number"].startswith("INV-")
++
++    # WIP is now empty for those entries
++    wip = admin_client.get("/invoices/wip", params={"project_id": project["id"]}).json()
++    assert wip["total_hours"] == "0.00"
++
++
++def test_generate_invoice_from_explicit_time_entry_selection(admin_client):
++    _, project, contract = _setup_project(admin_client, "inv-explicit@example.com")
++    entry1 = _create_time_entry(admin_client, project["id"], hours="3.0", billable=True)
++    entry2 = _create_time_entry(admin_client, project["id"], hours="1.0", billable=True)
++
++    resp = admin_client.post(
++        "/invoices/",
++        json={"project_id": project["id"], "contract_id": contract["id"], "time_entry_ids": [entry1["id"]]},
++    )
++    assert resp.status_code == 200, resp.text
++    invoice = resp.json()
++    assert invoice["subtotal"] == "600.00"
++
++    # entry2 remains in WIP
++    wip = admin_client.get("/invoices/wip", params={"project_id": project["id"]}).json()
++    assert wip["total_hours"] == "1.00"
++    assert wip["entry_count"] == 1
++
++
++def test_generate_invoice_with_manual_line_item_only(admin_client):
++    _, project, contract = _setup_project(admin_client, "inv-manual@example.com")
++
++    resp = admin_client.post(
++        "/invoices/",
++        json={
++            "project_id": project["id"],
++            "contract_id": contract["id"],
++            "time_entry_ids": [],
++            "manual_line_items": [{"description": "Milestone 1 fixed fee", "amount": "2500.00"}],
++        },
++    )
++    assert resp.status_code == 200, resp.text
++    invoice = resp.json()
++    assert invoice["subtotal"] == "2500.00"
++    assert len(invoice["line_items"]) == 1
++    assert invoice["line_items"][0]["time_entry_id"] is None
++
++
++def test_generate_invoice_applies_tax_amount(admin_client):
++    _, project, contract = _setup_project(admin_client, "inv-tax@example.com")
++    _create_time_entry(admin_client, project["id"], hours="2.0", billable=True)
++
++    resp = admin_client.post(
++        "/invoices/",
++        json={"project_id": project["id"], "contract_id": contract["id"], "tax_amount": "40.00"},
++    )
++    invoice = resp.json()
++    assert invoice["subtotal"] == "400.00"
++    assert invoice["tax_amount"] == "40.00"
++    assert invoice["total_amount"] == "440.00"
++
++
++def test_generate_invoice_rejects_already_invoiced_entry(admin_client):
++    _, project, contract = _setup_project(admin_client, "inv-double@example.com")
++    entry = _create_time_entry(admin_client, project["id"], hours="2.0", billable=True)
++
++    resp = admin_client.post(
++        "/invoices/",
++        json={"project_id": project["id"], "contract_id": contract["id"], "time_entry_ids": [entry["id"]]},
++    )
++    assert resp.status_code == 200
++
++    resp2 = admin_client.post(
++        "/invoices/",
++        json={"project_id": project["id"], "contract_id": contract["id"], "time_entry_ids": [entry["id"]]},
++    )
++    assert resp2.status_code == 400
++
++
++def test_generate_invoice_rejects_entry_from_other_project(admin_client):
++    _, project_a, contract_a = _setup_project(admin_client, "inv-cross-a@example.com")
++    _, project_b, _ = _setup_project(admin_client, "inv-cross-b@example.com")
++    entry_b = _create_time_entry(admin_client, project_b["id"], hours="2.0", billable=True)
++
++    resp = admin_client.post(
++        "/invoices/",
++        json={"project_id": project_a["id"], "contract_id": contract_a["id"], "time_entry_ids": [entry_b["id"]]},
++    )
++    assert resp.status_code == 400
++
++
++def test_generate_invoice_rejects_when_nothing_to_bill(admin_client):
++    _, project, contract = _setup_project(admin_client, "inv-empty@example.com")
++    resp = admin_client.post(
++        "/invoices/", json={"project_id": project["id"], "contract_id": contract["id"], "time_entry_ids": []}
++    )
++    assert resp.status_code == 422
++
++
++def test_generate_invoice_rejects_unknown_project(admin_client):
++    resp = admin_client.post("/invoices/", json={"project_id": 999999})
++    assert resp.status_code == 404
++
++
++def test_generate_invoice_rejects_contract_not_matching_project(admin_client):
++    _, project_a, _ = _setup_project(admin_client, "inv-mismatch-a@example.com")
++    _, _, contract_b = _setup_project(admin_client, "inv-mismatch-b@example.com")
++
++    resp = admin_client.post("/invoices/", json={"project_id": project_a["id"], "contract_id": contract_b["id"]})
++    assert resp.status_code == 404
++
++
++# --- Invoice lifecycle -------------------------------------------------------
++
++
++def _generate_invoice(admin_client, project_id, contract_id, hours="2.0"):
++    _create_time_entry(admin_client, project_id, hours=hours, billable=True)
++    resp = admin_client.post("/invoices/", json={"project_id": project_id, "contract_id": contract_id})
++    assert resp.status_code == 200, resp.text
++    return resp.json()
++
++
++def test_send_invoice_transitions_draft_to_sent(admin_client):
++    _, project, contract = _setup_project(admin_client, "inv-send@example.com")
++    invoice = _generate_invoice(admin_client, project["id"], contract["id"])
++
++    resp = admin_client.post(f"/invoices/{invoice['id']}/send")
++    assert resp.status_code == 200, resp.text
++    assert resp.json()["status"] == "sent"
++
++
++def test_send_invoice_rejects_non_draft(admin_client):
++    _, project, contract = _setup_project(admin_client, "inv-send-twice@example.com")
++    invoice = _generate_invoice(admin_client, project["id"], contract["id"])
++    admin_client.post(f"/invoices/{invoice['id']}/send")
++
++    resp = admin_client.post(f"/invoices/{invoice['id']}/send")
++    assert resp.status_code == 400
++
++
++def test_update_invoice_only_allowed_while_draft(admin_client):
++    _, project, contract = _setup_project(admin_client, "inv-update@example.com")
++    invoice = _generate_invoice(admin_client, project["id"], contract["id"])
++
++    resp = admin_client.patch(f"/invoices/{invoice['id']}", json={"notes": "Net 30"})
++    assert resp.status_code == 200, resp.text
++    assert resp.json()["notes"] == "Net 30"
++
++    admin_client.post(f"/invoices/{invoice['id']}/send")
++    resp2 = admin_client.patch(f"/invoices/{invoice['id']}", json={"notes": "too late"})
++    assert resp2.status_code == 400
++
++
++def test_record_full_payment_marks_invoice_paid(admin_client):
++    _, project, contract = _setup_project(admin_client, "inv-pay-full@example.com")
++    invoice = _generate_invoice(admin_client, project["id"], contract["id"], hours="2.0")  # $400
++    admin_client.post(f"/invoices/{invoice['id']}/send")
++
++    resp = admin_client.post(f"/invoices/{invoice['id']}/record-payment", json={"amount_paid": "400.00"})
++    assert resp.status_code == 200, resp.text
++    paid = resp.json()
++    assert paid["status"] == "paid"
++    assert paid["amount_paid"] == "400.00"
++
++
++def test_record_partial_payment_keeps_invoice_sent(admin_client):
++    _, project, contract = _setup_project(admin_client, "inv-pay-partial@example.com")
++    invoice = _generate_invoice(admin_client, project["id"], contract["id"], hours="2.0")  # $400
++    admin_client.post(f"/invoices/{invoice['id']}/send")
++
++    resp = admin_client.post(f"/invoices/{invoice['id']}/record-payment", json={"amount_paid": "150.00"})
++    assert resp.status_code == 200, resp.text
++    partial = resp.json()
++    assert partial["status"] == "sent"
++    assert partial["amount_paid"] == "150.00"
++
++
++def test_record_payment_rejects_draft_invoice(admin_client):
++    _, project, contract = _setup_project(admin_client, "inv-pay-draft@example.com")
++    invoice = _generate_invoice(admin_client, project["id"], contract["id"])
++
++    resp = admin_client.post(f"/invoices/{invoice['id']}/record-payment", json={"amount_paid": "100.00"})
++    assert resp.status_code == 400
++
++
++def test_void_invoice_releases_time_entries_back_to_wip(admin_client):
++    _, project, contract = _setup_project(admin_client, "inv-void@example.com")
++    invoice = _generate_invoice(admin_client, project["id"], contract["id"], hours="3.0")
++
++    wip_before = admin_client.get("/invoices/wip", params={"project_id": project["id"]}).json()
++    assert wip_before["total_hours"] == "0.00"
++
++    resp = admin_client.post(f"/invoices/{invoice['id']}/void", json={"reason": "wrong client billed"})
++    assert resp.status_code == 200, resp.text
++    assert resp.json()["status"] == "void"
++
++    wip_after = admin_client.get("/invoices/wip", params={"project_id": project["id"]}).json()
++    assert wip_after["total_hours"] == "3.00"
++
++
++def test_void_invoice_rejects_when_payment_recorded(admin_client):
++    _, project, contract = _setup_project(admin_client, "inv-void-paid@example.com")
++    invoice = _generate_invoice(admin_client, project["id"], contract["id"], hours="2.0")
++    admin_client.post(f"/invoices/{invoice['id']}/send")
++    admin_client.post(f"/invoices/{invoice['id']}/record-payment", json={"amount_paid": "100.00"})
++
++    resp = admin_client.post(f"/invoices/{invoice['id']}/void")
++    assert resp.status_code == 400
++
++
++def test_delete_draft_invoice_releases_time_entries(admin_client):
++    _, project, contract = _setup_project(admin_client, "inv-delete@example.com")
++    invoice = _generate_invoice(admin_client, project["id"], contract["id"], hours="1.5")
++
++    resp = admin_client.delete(f"/invoices/{invoice['id']}")
++    assert resp.status_code == 200, resp.text
++
++    wip = admin_client.get("/invoices/wip", params={"project_id": project["id"]}).json()
++    assert wip["total_hours"] == "1.50"
++
++    get_resp = admin_client.get(f"/invoices/{invoice['id']}")
++    assert get_resp.status_code == 404
++
++
++def test_delete_invoice_rejects_non_draft(admin_client):
++    _, project, contract = _setup_project(admin_client, "inv-delete-sent@example.com")
++    invoice = _generate_invoice(admin_client, project["id"], contract["id"])
++    admin_client.post(f"/invoices/{invoice['id']}/send")
++
++    resp = admin_client.delete(f"/invoices/{invoice['id']}")
++    assert resp.status_code == 400
++
++
++def test_list_invoices_filters_by_project_and_status(admin_client):
++    _, project_a, contract_a = _setup_project(admin_client, "inv-list-a@example.com")
++    _, project_b, contract_b = _setup_project(admin_client, "inv-list-b@example.com")
++    inv_a = _generate_invoice(admin_client, project_a["id"], contract_a["id"])
++    _generate_invoice(admin_client, project_b["id"], contract_b["id"])
++    admin_client.post(f"/invoices/{inv_a['id']}/send")
++
++    resp = admin_client.get("/invoices/", params={"project_id": project_a["id"]})
++    assert resp.status_code == 200
++    ids = [i["id"] for i in resp.json()]
++    assert inv_a["id"] in ids
++    assert len(resp.json()) == 1
++
++    resp2 = admin_client.get("/invoices/", params={"status": "sent"})
++    assert all(i["status"] == "sent" for i in resp2.json())
++
++
++# --- Permissions ---------------------------------------------------------
++
++
++def test_staff_outside_department_cannot_generate_invoice(admin_client, client):
++    dept = _create_department(admin_client)
++    outsider = _create_user(admin_client)  # no department
++
++    org_client = _create_client(admin_client, email="inv-perm-client@example.com", department_id=dept["id"])
++    project = _create_project(admin_client, org_client["id"])
++    contract = _create_contract(admin_client, project["id"], billing_type="hourly", hourly_rate="150.00", value=None)
++    _create_time_entry(admin_client, project["id"], hours="2.0", billable=True)
++
++    headers = _auth_headers(client, outsider["email"])
++    resp = client.post(
++        "/invoices/", json={"project_id": project["id"], "contract_id": contract["id"]}, headers=headers
++    )
++    assert resp.status_code == 403
++
++
++def test_staff_in_department_can_generate_invoice(admin_client, client):
++    dept = _create_department(admin_client)
++    member = _create_user(admin_client, department_id=dept["id"])
++
++    org_client = _create_client(admin_client, email="inv-perm-member@example.com", department_id=dept["id"])
++    project = _create_project(admin_client, org_client["id"])
++    contract = _create_contract(admin_client, project["id"], billing_type="hourly", hourly_rate="150.00", value=None)
++    _create_time_entry(admin_client, project["id"], hours="2.0", billable=True)
++
++    headers = _auth_headers(client, member["email"])
++    resp = client.post(
++        "/invoices/", json={"project_id": project["id"], "contract_id": contract["id"]}, headers=headers
++    )
++    assert resp.status_code == 200, resp.text
++
++
++def test_only_admin_can_set_billing_rate(admin_client, staff_client):
++    resp = staff_client.patch("/users/admin@org.com/billing-rate", json={"standard_billing_rate": "999.00"})
++    assert resp.status_code == 403
++
++
++# --- Realization rate report -------------------------------------------------
++
++
++def test_realization_report_by_project(admin_client):
++    _, project, contract = _setup_project(admin_client, "real-project@example.com")
++    _create_time_entry(admin_client, project["id"], hours="5.0", billable=True, entry_date="2026-08-01")
++    invoice = admin_client.post(
++        "/invoices/", json={"project_id": project["id"], "contract_id": contract["id"]}
++    ).json()
++    admin_client.post(f"/invoices/{invoice['id']}/send")
++
++    resp = admin_client.get(
++        "/reports/realization",
++        params={"group_by": "project", "start_date": "2026-08-01", "end_date": "2026-08-31"},
++    )
++    assert resp.status_code == 200, resp.text
++    data = resp.json()
++    row = next(r for r in data["rows"] if r["key"] == str(project["id"]))
++    assert row["worked_value"] == "1000.00"
++    assert row["billed_value"] == "1000.00"
++    assert row["realization_rate"] == "1.0000"
++
++
++def test_realization_report_reflects_partial_billing(admin_client):
++    _, project, contract = _setup_project(admin_client, "real-partial@example.com")
++    entry1 = _create_time_entry(admin_client, project["id"], hours="4.0", billable=True, entry_date="2026-08-02")
++    _create_time_entry(admin_client, project["id"], hours="2.0", billable=True, entry_date="2026-08-03")
++
++    invoice = admin_client.post(
++        "/invoices/",
++        json={"project_id": project["id"], "contract_id": contract["id"], "time_entry_ids": [entry1["id"]]},
++    ).json()
++    admin_client.post(f"/invoices/{invoice['id']}/send")
++
++    resp = admin_client.get(
++        "/reports/realization",
++        params={"group_by": "project", "project_id": project["id"]},
++    )
++    row = resp.json()["rows"][0]
++    # worked = (4+2)*200 = 1200, billed = 4*200 = 800
++    assert row["worked_value"] == "1200.00"
++    assert row["billed_value"] == "800.00"
++    assert row["realization_rate"] == "0.6667"
++
++
++def test_realization_report_by_partner(admin_client):
++    partner = _create_user(admin_client, email="partner@org.com", name="Pat Partner")
++    client_obj = _create_client(admin_client, email="real-partner@example.com")
++    project = _create_project(
++        admin_client,
++        client_obj["id"],
++        engagement_partner_email=partner["email"],
++    )
++    contract = _create_contract(admin_client, project["id"], billing_type="hourly", hourly_rate="100.00", value=None)
++    _create_time_entry(admin_client, project["id"], hours="10.0", billable=True, entry_date="2026-08-05")
++
++    resp = admin_client.get("/reports/realization", params={"group_by": "partner"})
++    assert resp.status_code == 200, resp.text
++    row = next(r for r in resp.json()["rows"] if r["key"] == "partner@org.com")
++    assert row["label"] == "Pat Partner"
++    assert row["worked_value"] == "1000.00"
++
++
++def test_void_invoice_removes_it_from_realization_billed_value(admin_client):
++    _, project, contract = _setup_project(admin_client, "real-void@example.com")
++    _create_time_entry(admin_client, project["id"], hours="3.0", billable=True, entry_date="2026-08-06")
++    invoice = admin_client.post(
++        "/invoices/", json={"project_id": project["id"], "contract_id": contract["id"]}
++    ).json()
++    admin_client.post(f"/invoices/{invoice['id']}/void")
++
++    resp = admin_client.get("/reports/realization", params={"group_by": "project", "project_id": project["id"]})
++    row = resp.json()["rows"][0]
++    assert row["billed_value"] == "0.00"
++    assert row["worked_value"] == "600.00"
+-- 
+2.43.0
+

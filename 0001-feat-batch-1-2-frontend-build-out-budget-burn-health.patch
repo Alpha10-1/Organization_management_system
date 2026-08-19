@@ -1,0 +1,2785 @@
+From 7371ec820f7111d0c4e04984bb7d780d964a16e7 Mon Sep 17 00:00:00 2001
+From: Claude <claude@anthropic.com>
+Date: Tue, 18 Aug 2026 22:17:57 +0000
+Subject: [PATCH] feat: batch 1/2 frontend build-out - budget burn, health,
+ change orders, timeline, milestone signoff, clone; new
+ department/skills/leave/resource-request pages
+
+---
+ src/app/dashboard/departments/page.js       | 696 +++++++++++++++++++
+ src/app/dashboard/leave/page.js             | 306 +++++++++
+ src/app/dashboard/projects/page.js          | 706 +++++++++++++++++++-
+ src/app/dashboard/resource-requests/page.js | 403 +++++++++++
+ src/app/dashboard/skills/page.js            | 408 +++++++++++
+ src/lib/api.js                              |  10 +-
+ src/lib/nav.js                              |  28 +
+ 7 files changed, 2544 insertions(+), 13 deletions(-)
+ create mode 100644 src/app/dashboard/departments/page.js
+ create mode 100644 src/app/dashboard/leave/page.js
+ create mode 100644 src/app/dashboard/resource-requests/page.js
+ create mode 100644 src/app/dashboard/skills/page.js
+
+diff --git a/src/app/dashboard/departments/page.js b/src/app/dashboard/departments/page.js
+new file mode 100644
+index 0000000..38642b5
+--- /dev/null
++++ b/src/app/dashboard/departments/page.js
+@@ -0,0 +1,696 @@
++"use client";
++
++import { useEffect, useMemo, useState } from "react";
++import {
++  fetchCurrentUser,
++  fetchDepartments,
++  fetchDepartmentDetail,
++  fetchDepartmentDashboard,
++  createDepartment,
++  updateDepartment,
++  deleteDepartment,
++  fetchUsers,
++  fetchTaskTemplates,
++  createTaskTemplate,
++  deleteTaskTemplate,
++  applyTaskTemplateToUser,
++} from "@/lib/api";
++
++function formatMoney(value) {
++  if (value === null || value === undefined || value === "") return "—";
++  return `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
++}
++
++const initialDeptForm = {
++  name: "",
++  description: "",
++  department_head_user_id: "",
++  annual_budget: "",
++  cost_center_code: "",
++};
++
++const initialTemplateForm = {
++  name: "",
++  description: "",
++  trigger_event: "onboarding",
++  items: [{ title: "", relative_due_days: 1 }],
++};
++
++export default function DepartmentsPage() {
++  const [currentUser, setCurrentUser] = useState(null);
++  const [isAdmin, setIsAdmin] = useState(false);
++  const [departments, setDepartments] = useState([]);
++  const [users, setUsers] = useState([]);
++  const [usersError, setUsersError] = useState("");
++  const [loading, setLoading] = useState(true);
++  const [error, setError] = useState("");
++  const [saving, setSaving] = useState(false);
++
++  const [selectedId, setSelectedId] = useState(null);
++  const [detail, setDetail] = useState(null);
++  const [dashboard, setDashboard] = useState(null);
++  const [templates, setTemplates] = useState([]);
++
++  const [showDeptModal, setShowDeptModal] = useState(false);
++  const [editingDept, setEditingDept] = useState(null);
++  const [deptForm, setDeptForm] = useState(initialDeptForm);
++
++  const [showTemplateModal, setShowTemplateModal] = useState(false);
++  const [templateForm, setTemplateForm] = useState(initialTemplateForm);
++
++  const [applyTarget, setApplyTarget] = useState(null);
++  const [applyEmail, setApplyEmail] = useState("");
++
++  useEffect(() => {
++    fetchCurrentUser()
++      .then((u) => {
++        setCurrentUser(u);
++        setIsAdmin(u?.role === "admin");
++      })
++      .catch(() => setCurrentUser(null));
++    loadDepartments();
++    fetchUsers()
++      .then(setUsers)
++      .catch(() => setUsersError("Admin access required to see the full staff directory."));
++  }, []);
++
++  async function loadDepartments() {
++    setLoading(true);
++    setError("");
++    try {
++      const data = await fetchDepartments();
++      setDepartments(data);
++      if (data.length && !selectedId) {
++        setSelectedId(data[0].id);
++      }
++    } catch (err) {
++      setError(err.message || "Failed to load departments");
++    } finally {
++      setLoading(false);
++    }
++  }
++
++  useEffect(() => {
++    if (!selectedId) return;
++    loadDetail(selectedId);
++  }, [selectedId]);
++
++  async function loadDetail(id) {
++    try {
++      setError("");
++      const [d, dash, tpls] = await Promise.all([
++        fetchDepartmentDetail(id),
++        fetchDepartmentDashboard(id).catch(() => null),
++        fetchTaskTemplates({ department_id: id }).catch(() => []),
++      ]);
++      setDetail(d);
++      setDashboard(dash);
++      setTemplates(tpls.filter((t) => t.trigger_event === "onboarding" || t.trigger_event === "offboarding"));
++    } catch (err) {
++      setError(err.message || "Failed to load department detail");
++    }
++  }
++
++  function userLabel(id) {
++    const u = users.find((x) => x.id === id);
++    return u ? `${u.name} (${u.email})` : id ? `User #${id}` : "—";
++  }
++
++  function openCreateDept() {
++    setEditingDept(null);
++    setDeptForm(initialDeptForm);
++    setShowDeptModal(true);
++  }
++
++  function openEditDept(dept) {
++    setEditingDept(dept);
++    setDeptForm({
++      name: dept.name,
++      description: dept.description || "",
++      department_head_user_id: dept.department_head_user_id ? String(dept.department_head_user_id) : "",
++      annual_budget: dept.annual_budget ?? "",
++      cost_center_code: dept.cost_center_code || "",
++    });
++    setShowDeptModal(true);
++  }
++
++  async function handleSubmitDept(e) {
++    e.preventDefault();
++    try {
++      setSaving(true);
++      setError("");
++      const payload = {
++        name: deptForm.name,
++        description: deptForm.description || undefined,
++        department_head_user_id: deptForm.department_head_user_id
++          ? Number(deptForm.department_head_user_id)
++          : undefined,
++        annual_budget: deptForm.annual_budget !== "" ? Number(deptForm.annual_budget) : undefined,
++        cost_center_code: deptForm.cost_center_code || undefined,
++      };
++      if (editingDept) {
++        await updateDepartment(editingDept.id, payload);
++      } else {
++        await createDepartment(payload);
++      }
++      setShowDeptModal(false);
++      await loadDepartments();
++      if (selectedId) await loadDetail(selectedId);
++    } catch (err) {
++      setError(err.message || "Failed to save department");
++    } finally {
++      setSaving(false);
++    }
++  }
++
++  async function handleDeleteDept(dept) {
++    if (!window.confirm(`Delete department "${dept.name}"?`)) return;
++    try {
++      setError("");
++      await deleteDepartment(dept.id);
++      if (selectedId === dept.id) setSelectedId(null);
++      await loadDepartments();
++    } catch (err) {
++      setError(err.message || "Failed to delete department");
++    }
++  }
++
++  function openTemplateModal() {
++    setTemplateForm({ ...initialTemplateForm, name: "" });
++    setShowTemplateModal(true);
++  }
++
++  function updateTemplateItem(idx, field, value) {
++    setTemplateForm((p) => {
++      const items = [...p.items];
++      items[idx] = { ...items[idx], [field]: value };
++      return { ...p, items };
++    });
++  }
++
++  function addTemplateItem() {
++    setTemplateForm((p) => ({
++      ...p,
++      items: [...p.items, { title: "", relative_due_days: p.items.length + 1 }],
++    }));
++  }
++
++  function removeTemplateItem(idx) {
++    setTemplateForm((p) => ({ ...p, items: p.items.filter((_, i) => i !== idx) }));
++  }
++
++  async function handleCreateTemplate(e) {
++    e.preventDefault();
++    if (!selectedId) return;
++    try {
++      setSaving(true);
++      setError("");
++      await createTaskTemplate({
++        name: templateForm.name,
++        description: templateForm.description || undefined,
++        trigger_event: templateForm.trigger_event,
++        department_id: selectedId,
++        items: templateForm.items
++          .filter((it) => it.title.trim())
++          .map((it, i) => ({
++            title: it.title,
++            priority: "medium",
++            relative_due_days: it.relative_due_days !== "" ? Number(it.relative_due_days) : undefined,
++            order_index: i,
++          })),
++      });
++      setShowTemplateModal(false);
++      await loadDetail(selectedId);
++    } catch (err) {
++      setError(err.message || "Failed to create checklist");
++    } finally {
++      setSaving(false);
++    }
++  }
++
++  async function handleDeleteTemplate(tpl) {
++    if (!window.confirm(`Delete checklist "${tpl.name}"?`)) return;
++    try {
++      setError("");
++      await deleteTaskTemplate(tpl.id);
++      await loadDetail(selectedId);
++    } catch (err) {
++      setError(err.message || "Failed to delete checklist");
++    }
++  }
++
++  async function handleApplyTemplate(e) {
++    e.preventDefault();
++    if (!applyTarget || !applyEmail) return;
++    try {
++      setSaving(true);
++      setError("");
++      await applyTaskTemplateToUser(applyTarget.id, { user_email: applyEmail });
++      setApplyTarget(null);
++      setApplyEmail("");
++    } catch (err) {
++      setError(err.message || "Failed to apply checklist");
++    } finally {
++      setSaving(false);
++    }
++  }
++
++  const selectedDept = useMemo(
++    () => departments.find((d) => d.id === selectedId) || null,
++    [departments, selectedId]
++  );
++
++  return (
++    <div className="space-y-6">
++      <div className="flex items-start justify-between gap-4">
++        <div>
++          <h1 className="text-2xl font-bold text-slate-900">Departments</h1>
++          <p className="text-sm text-slate-500">
++            Cost centers, staffing, and KPI visibility per department.
++          </p>
++        </div>
++        {isAdmin ? (
++          <button
++            onClick={openCreateDept}
++            className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
++          >
++            + New Department
++          </button>
++        ) : null}
++      </div>
++
++      {error ? (
++        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
++          {error}
++        </div>
++      ) : null}
++
++      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr]">
++        <div className="space-y-2 rounded-3xl border border-slate-200 bg-white p-4">
++          {loading ? (
++            <p className="text-sm text-slate-400">Loading...</p>
++          ) : departments.length === 0 ? (
++            <p className="text-sm text-slate-400">No departments yet.</p>
++          ) : (
++            departments.map((d) => (
++              <button
++                key={d.id}
++                onClick={() => setSelectedId(d.id)}
++                className={`block w-full rounded-xl px-3 py-2 text-left text-sm ${
++                  selectedId === d.id ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"
++                }`}
++              >
++                <p className="font-medium">{d.name}</p>
++                {d.cost_center_code ? (
++                  <p className={`text-xs ${selectedId === d.id ? "text-slate-300" : "text-slate-400"}`}>
++                    {d.cost_center_code}
++                  </p>
++                ) : null}
++              </button>
++            ))
++          )}
++        </div>
++
++        <div className="space-y-6">
++          {!selectedDept ? (
++            <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-400">
++              Select a department to see detail.
++            </div>
++          ) : (
++            <>
++              <div className="rounded-3xl border border-slate-200 bg-white p-6">
++                <div className="flex items-start justify-between gap-3">
++                  <div>
++                    <h2 className="text-lg font-semibold text-slate-900">{selectedDept.name}</h2>
++                    {detail?.description ? (
++                      <p className="mt-1 text-sm text-slate-500">{detail.description}</p>
++                    ) : null}
++                  </div>
++                  {isAdmin ? (
++                    <div className="flex shrink-0 gap-2">
++                      <button
++                        onClick={() => openEditDept(selectedDept)}
++                        className="rounded-xl border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
++                      >
++                        Edit
++                      </button>
++                      <button
++                        onClick={() => handleDeleteDept(selectedDept)}
++                        className="rounded-xl border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50"
++                      >
++                        Delete
++                      </button>
++                    </div>
++                  ) : null}
++                </div>
++                <div className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
++                  <div>
++                    <p className="text-xs uppercase tracking-wide text-slate-400">Cost Center</p>
++                    <p className="font-medium text-slate-800">{selectedDept.cost_center_code || "—"}</p>
++                  </div>
++                  <div>
++                    <p className="text-xs uppercase tracking-wide text-slate-400">Annual Budget</p>
++                    <p className="font-medium text-slate-800">{formatMoney(selectedDept.annual_budget)}</p>
++                  </div>
++                  <div>
++                    <p className="text-xs uppercase tracking-wide text-slate-400">Department Head</p>
++                    <p className="font-medium text-slate-800">
++                      {detail?.department_head ? detail.department_head.name : "—"}
++                    </p>
++                  </div>
++                  <div>
++                    <p className="text-xs uppercase tracking-wide text-slate-400">Staff Count</p>
++                    <p className="font-medium text-slate-800">{detail?.staff_count ?? "—"}</p>
++                  </div>
++                </div>
++              </div>
++
++              {dashboard ? (
++                <div className="rounded-3xl border border-slate-200 bg-white p-6">
++                  <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
++                    KPI Dashboard
++                  </h3>
++                  <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
++                    <div>
++                      <p className="text-2xl font-bold text-slate-900">
++                        {dashboard.average_allocated_percent.toFixed(0)}%
++                      </p>
++                      <p className="text-xs text-slate-500">Avg. Utilization</p>
++                    </div>
++                    <div>
++                      <p className="text-2xl font-bold text-slate-900">{dashboard.active_engagement_count}</p>
++                      <p className="text-xs text-slate-500">Active Engagements</p>
++                    </div>
++                    <div>
++                      <p className="text-2xl font-bold capitalize text-slate-900">
++                        {dashboard.average_risk_level || "—"}
++                      </p>
++                      <p className="text-xs text-slate-500">Avg. Risk Level</p>
++                    </div>
++                    <div>
++                      <p className="text-2xl font-bold text-slate-900">{formatMoney(dashboard.revenue_to_date)}</p>
++                      <p className="text-xs text-slate-500">Revenue to Date</p>
++                    </div>
++                  </div>
++                  <div className="mt-4 flex flex-wrap gap-4 text-xs text-slate-500">
++                    <span>Over-allocated: {dashboard.over_allocated_count}</span>
++                    <span>Under-allocated: {dashboard.under_allocated_count}</span>
++                    <span>On bench: {dashboard.bench_count}</span>
++                    {dashboard.budget_variance !== null && dashboard.budget_variance !== undefined ? (
++                      <span>Budget variance: {formatMoney(dashboard.budget_variance)}</span>
++                    ) : null}
++                  </div>
++                </div>
++              ) : null}
++
++              <div className="rounded-3xl border border-slate-200 bg-white p-6">
++                <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400">Staff</h3>
++                {!detail?.staff_by_position || Object.keys(detail.staff_by_position).length === 0 ? (
++                  <p className="mt-2 text-sm text-slate-400">No staff assigned to this department.</p>
++                ) : (
++                  <div className="mt-3 space-y-3">
++                    {Object.entries(detail.staff_by_position).map(([position, members]) => (
++                      <div key={position}>
++                        <p className="text-xs font-semibold capitalize text-slate-500">{position}</p>
++                        <div className="mt-1 flex flex-wrap gap-2">
++                          {members.map((m) => (
++                            <span
++                              key={m.id}
++                              className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-700"
++                            >
++                              {m.name}
++                            </span>
++                          ))}
++                        </div>
++                      </div>
++                    ))}
++                  </div>
++                )}
++              </div>
++
++              <div className="rounded-3xl border border-slate-200 bg-white p-6">
++                <div className="flex items-center justify-between">
++                  <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
++                    Onboarding / Offboarding Checklists
++                  </h3>
++                  <button
++                    onClick={openTemplateModal}
++                    className="rounded-xl border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
++                  >
++                    + New Checklist
++                  </button>
++                </div>
++                {templates.length === 0 ? (
++                  <p className="mt-2 text-sm text-slate-400">No checklists for this department yet.</p>
++                ) : (
++                  <div className="mt-3 space-y-2">
++                    {templates.map((t) => (
++                      <div key={t.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
++                        <div className="flex items-start justify-between gap-2">
++                          <div>
++                            <p className="text-sm font-medium text-slate-800">{t.name}</p>
++                            <p className="text-xs capitalize text-slate-500">
++                              {t.trigger_event} · {t.items.length} item{t.items.length === 1 ? "" : "s"}
++                            </p>
++                          </div>
++                          <div className="flex shrink-0 gap-3">
++                            <button
++                              onClick={() => setApplyTarget(t)}
++                              className="text-xs font-semibold text-slate-700 hover:underline"
++                            >
++                              Apply to Person
++                            </button>
++                            <button
++                              onClick={() => handleDeleteTemplate(t)}
++                              className="text-xs font-semibold text-rose-500 hover:underline"
++                            >
++                              Delete
++                            </button>
++                          </div>
++                        </div>
++                        <ul className="mt-2 space-y-1 text-xs text-slate-600">
++                          {t.items.map((it) => (
++                            <li key={it.id}>
++                              • {it.title}
++                              {it.relative_due_days != null ? ` (day ${it.relative_due_days})` : ""}
++                            </li>
++                          ))}
++                        </ul>
++                      </div>
++                    ))}
++                  </div>
++                )}
++              </div>
++            </>
++          )}
++        </div>
++      </div>
++
++      {showDeptModal ? (
++        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
++          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
++            <div className="mb-4 flex items-start justify-between gap-4">
++              <h2 className="text-xl font-bold text-slate-900">
++                {editingDept ? "Edit Department" : "New Department"}
++              </h2>
++              <button
++                onClick={() => setShowDeptModal(false)}
++                className="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-600 hover:bg-slate-100"
++              >
++                Close
++              </button>
++            </div>
++            <form onSubmit={handleSubmitDept} className="space-y-4">
++              <input
++                type="text"
++                placeholder="Department name"
++                value={deptForm.name}
++                onChange={(e) => setDeptForm((p) => ({ ...p, name: e.target.value }))}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                required
++              />
++              <textarea
++                placeholder="Description"
++                value={deptForm.description}
++                onChange={(e) => setDeptForm((p) => ({ ...p, description: e.target.value }))}
++                rows={2}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++              />
++              <div className="grid grid-cols-2 gap-3">
++                <input
++                  type="number"
++                  step="0.01"
++                  placeholder="Annual budget"
++                  value={deptForm.annual_budget}
++                  onChange={(e) => setDeptForm((p) => ({ ...p, annual_budget: e.target.value }))}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                />
++                <input
++                  type="text"
++                  placeholder="Cost center code"
++                  value={deptForm.cost_center_code}
++                  onChange={(e) => setDeptForm((p) => ({ ...p, cost_center_code: e.target.value }))}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                />
++              </div>
++              <div>
++                <label className="mb-2 block text-sm font-medium text-slate-700">Department Head</label>
++                {usersError ? (
++                  <p className="text-xs text-slate-400">{usersError}</p>
++                ) : (
++                  <select
++                    value={deptForm.department_head_user_id}
++                    onChange={(e) => setDeptForm((p) => ({ ...p, department_head_user_id: e.target.value }))}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  >
++                    <option value="">None</option>
++                    {users.map((u) => (
++                      <option key={u.id} value={u.id}>
++                        {u.name} ({u.email})
++                      </option>
++                    ))}
++                  </select>
++                )}
++              </div>
++              <div className="flex justify-end gap-3">
++                <button
++                  type="button"
++                  onClick={() => setShowDeptModal(false)}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
++                >
++                  Cancel
++                </button>
++                <button
++                  type="submit"
++                  disabled={saving}
++                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-70"
++                >
++                  {saving ? "Saving..." : "Save"}
++                </button>
++              </div>
++            </form>
++          </div>
++        </div>
++      ) : null}
++
++      {showTemplateModal ? (
++        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
++          <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
++            <div className="mb-4 flex items-start justify-between gap-4">
++              <h2 className="text-xl font-bold text-slate-900">New Checklist</h2>
++              <button
++                onClick={() => setShowTemplateModal(false)}
++                className="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-600 hover:bg-slate-100"
++              >
++                Close
++              </button>
++            </div>
++            <form onSubmit={handleCreateTemplate} className="space-y-4">
++              <input
++                type="text"
++                placeholder="Checklist name"
++                value={templateForm.name}
++                onChange={(e) => setTemplateForm((p) => ({ ...p, name: e.target.value }))}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                required
++              />
++              <select
++                value={templateForm.trigger_event}
++                onChange={(e) => setTemplateForm((p) => ({ ...p, trigger_event: e.target.value }))}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++              >
++                <option value="onboarding">Onboarding</option>
++                <option value="offboarding">Offboarding</option>
++              </select>
++              <div className="space-y-2">
++                <label className="block text-sm font-medium text-slate-700">Checklist Items</label>
++                {templateForm.items.map((it, idx) => (
++                  <div key={idx} className="flex gap-2">
++                    <input
++                      type="text"
++                      placeholder="Item title"
++                      value={it.title}
++                      onChange={(e) => updateTemplateItem(idx, "title", e.target.value)}
++                      className="flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
++                    />
++                    <input
++                      type="number"
++                      placeholder="Day"
++                      value={it.relative_due_days}
++                      onChange={(e) => updateTemplateItem(idx, "relative_due_days", e.target.value)}
++                      className="w-20 rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
++                    />
++                    <button
++                      type="button"
++                      onClick={() => removeTemplateItem(idx)}
++                      className="text-xs font-semibold text-rose-500 hover:underline"
++                    >
++                      Remove
++                    </button>
++                  </div>
++                ))}
++                <button
++                  type="button"
++                  onClick={addTemplateItem}
++                  className="text-xs font-semibold text-slate-700 hover:underline"
++                >
++                  + Add item
++                </button>
++              </div>
++              <div className="flex justify-end gap-3">
++                <button
++                  type="button"
++                  onClick={() => setShowTemplateModal(false)}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
++                >
++                  Cancel
++                </button>
++                <button
++                  type="submit"
++                  disabled={saving}
++                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-70"
++                >
++                  {saving ? "Saving..." : "Create Checklist"}
++                </button>
++              </div>
++            </form>
++          </div>
++        </div>
++      ) : null}
++
++      {applyTarget ? (
++        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
++          <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl">
++            <h2 className="mb-4 text-lg font-bold text-slate-900">Apply "{applyTarget.name}"</h2>
++            <form onSubmit={handleApplyTemplate} className="space-y-4">
++              <input
++                type="email"
++                placeholder="Person's email"
++                value={applyEmail}
++                onChange={(e) => setApplyEmail(e.target.value)}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                required
++              />
++              <div className="flex justify-end gap-3">
++                <button
++                  type="button"
++                  onClick={() => setApplyTarget(null)}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
++                >
++                  Cancel
++                </button>
++                <button
++                  type="submit"
++                  disabled={saving}
++                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-70"
++                >
++                  {saving ? "Applying..." : "Apply"}
++                </button>
++              </div>
++            </form>
++          </div>
++        </div>
++      ) : null}
++    </div>
++  );
++}
+diff --git a/src/app/dashboard/leave/page.js b/src/app/dashboard/leave/page.js
+new file mode 100644
+index 0000000..2bf81a7
+--- /dev/null
++++ b/src/app/dashboard/leave/page.js
+@@ -0,0 +1,306 @@
++"use client";
++
++import { useEffect, useState } from "react";
++import {
++  fetchCurrentUser,
++  fetchLeaveRequests,
++  createLeaveRequest,
++  approveLeaveRequest,
++  rejectLeaveRequest,
++  cancelLeaveRequest,
++} from "@/lib/api";
++
++function formatDate(value) {
++  if (!value) return "—";
++  return new Date(value).toLocaleDateString();
++}
++
++const STATUS_STYLES = {
++  pending: "bg-amber-100 text-amber-700",
++  approved: "bg-emerald-100 text-emerald-700",
++  rejected: "bg-rose-100 text-rose-700",
++  cancelled: "bg-slate-100 text-slate-500",
++};
++
++const initialForm = { leave_type: "pto", start_date: "", end_date: "", reason: "" };
++
++export default function LeaveRequestsPage() {
++  const [currentUser, setCurrentUser] = useState(null);
++  const [requests, setRequests] = useState([]);
++  const [statusFilter, setStatusFilter] = useState("");
++  const [loading, setLoading] = useState(true);
++  const [error, setError] = useState("");
++  const [saving, setSaving] = useState(false);
++
++  const [showModal, setShowModal] = useState(false);
++  const [form, setForm] = useState(initialForm);
++
++  useEffect(() => {
++    fetchCurrentUser().then(setCurrentUser).catch(() => setCurrentUser(null));
++    load();
++  }, []);
++
++  async function load(overrideStatus) {
++    setLoading(true);
++    setError("");
++    try {
++      const status = overrideStatus !== undefined ? overrideStatus : statusFilter;
++      const data = await fetchLeaveRequests(status ? { status } : {});
++      setRequests(data);
++    } catch (err) {
++      setError(err.message || "Failed to load leave requests");
++    } finally {
++      setLoading(false);
++    }
++  }
++
++  async function handleSubmit(e) {
++    e.preventDefault();
++    try {
++      setSaving(true);
++      setError("");
++      await createLeaveRequest({
++        leave_type: form.leave_type,
++        start_date: form.start_date,
++        end_date: form.end_date,
++        reason: form.reason || undefined,
++      });
++      setShowModal(false);
++      setForm(initialForm);
++      await load();
++    } catch (err) {
++      setError(err.message || "Failed to submit leave request");
++    } finally {
++      setSaving(false);
++    }
++  }
++
++  async function handleApprove(req) {
++    try {
++      setError("");
++      await approveLeaveRequest(req.id);
++      await load();
++    } catch (err) {
++      setError(err.message || "Failed to approve request");
++    }
++  }
++
++  async function handleReject(req) {
++    try {
++      setError("");
++      const notes = window.prompt("Reason for rejecting (optional):") || undefined;
++      await rejectLeaveRequest(req.id, { notes });
++      await load();
++    } catch (err) {
++      setError(err.message || "Failed to reject request");
++    }
++  }
++
++  async function handleCancel(req) {
++    if (!window.confirm("Cancel this leave request?")) return;
++    try {
++      setError("");
++      await cancelLeaveRequest(req.id);
++      await load();
++    } catch (err) {
++      setError(err.message || "Failed to cancel request");
++    }
++  }
++
++  const mine = currentUser ? requests.filter((r) => r.user_id === currentUser.id) : [];
++  const forApproval = currentUser
++    ? requests.filter((r) => r.approver_user_id === currentUser.id && r.user_id !== currentUser.id)
++    : [];
++
++  function RequestCard({ req, showApprovalActions }) {
++    return (
++      <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
++        <div className="flex items-start justify-between gap-2">
++          <div>
++            <p className="text-sm font-medium capitalize text-slate-800">
++              {req.leave_type} · {formatDate(req.start_date)} – {formatDate(req.end_date)}
++            </p>
++            {req.reason ? <p className="mt-1 text-xs text-slate-600">{req.reason}</p> : null}
++          </div>
++          <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold capitalize ${STATUS_STYLES[req.status] || STATUS_STYLES.pending}`}>
++            {req.status}
++          </span>
++        </div>
++        {req.status !== "pending" && req.decided_by_name ? (
++          <p className="mt-2 text-[11px] text-slate-400">
++            Decided by {req.decided_by_name} on {formatDate(req.decided_at)}
++            {req.decision_notes ? ` — ${req.decision_notes}` : ""}
++          </p>
++        ) : null}
++        <div className="mt-2 flex gap-3">
++          {showApprovalActions && req.status === "pending" ? (
++            <>
++              <button onClick={() => handleApprove(req)} className="text-xs font-semibold text-emerald-600 hover:underline">
++                Approve
++              </button>
++              <button onClick={() => handleReject(req)} className="text-xs font-semibold text-rose-600 hover:underline">
++                Reject
++              </button>
++            </>
++          ) : null}
++          {!showApprovalActions && req.status === "pending" ? (
++            <button onClick={() => handleCancel(req)} className="text-xs font-semibold text-slate-500 hover:underline">
++              Cancel
++            </button>
++          ) : null}
++        </div>
++      </div>
++    );
++  }
++
++  return (
++    <div className="space-y-6">
++      <div className="flex items-start justify-between gap-4">
++        <div>
++          <h1 className="text-2xl font-bold text-slate-900">Leave &amp; PTO</h1>
++          <p className="text-sm text-slate-500">
++            Requests route to your manager automatically for approval.
++          </p>
++        </div>
++        <button
++          onClick={() => setShowModal(true)}
++          className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
++        >
++          + Request Leave
++        </button>
++      </div>
++
++      {error ? (
++        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
++          {error}
++        </div>
++      ) : null}
++
++      <div className="flex items-center gap-3">
++        <select
++          value={statusFilter}
++          onChange={(e) => {
++            setStatusFilter(e.target.value);
++            load(e.target.value);
++          }}
++          className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
++        >
++          <option value="">All statuses</option>
++          <option value="pending">Pending</option>
++          <option value="approved">Approved</option>
++          <option value="rejected">Rejected</option>
++          <option value="cancelled">Cancelled</option>
++        </select>
++      </div>
++
++      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
++        <div className="rounded-3xl border border-slate-200 bg-white p-5">
++          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
++            My Requests ({mine.length})
++          </h2>
++          {loading ? (
++            <p className="text-sm text-slate-400">Loading...</p>
++          ) : mine.length === 0 ? (
++            <p className="text-sm text-slate-400">No requests yet.</p>
++          ) : (
++            <div className="space-y-2">
++              {mine.map((r) => (
++                <RequestCard key={r.id} req={r} showApprovalActions={false} />
++              ))}
++            </div>
++          )}
++        </div>
++
++        <div className="rounded-3xl border border-slate-200 bg-white p-5">
++          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
++            Awaiting My Approval ({forApproval.length})
++          </h2>
++          {loading ? (
++            <p className="text-sm text-slate-400">Loading...</p>
++          ) : forApproval.length === 0 ? (
++            <p className="text-sm text-slate-400">Nothing routed to you right now.</p>
++          ) : (
++            <div className="space-y-2">
++              {forApproval.map((r) => (
++                <RequestCard key={r.id} req={r} showApprovalActions={true} />
++              ))}
++            </div>
++          )}
++        </div>
++      </div>
++
++      {showModal ? (
++        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
++          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
++            <div className="mb-4 flex items-start justify-between gap-4">
++              <h2 className="text-xl font-bold text-slate-900">Request Leave</h2>
++              <button
++                onClick={() => setShowModal(false)}
++                className="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-600 hover:bg-slate-100"
++              >
++                Close
++              </button>
++            </div>
++            <form onSubmit={handleSubmit} className="space-y-4">
++              <select
++                value={form.leave_type}
++                onChange={(e) => setForm((p) => ({ ...p, leave_type: e.target.value }))}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++              >
++                <option value="pto">PTO</option>
++                <option value="sick">Sick</option>
++                <option value="unpaid">Unpaid</option>
++                <option value="other">Other</option>
++              </select>
++              <div className="grid grid-cols-2 gap-3">
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">Start Date</label>
++                  <input
++                    type="date"
++                    value={form.start_date}
++                    onChange={(e) => setForm((p) => ({ ...p, start_date: e.target.value }))}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                    required
++                  />
++                </div>
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">End Date</label>
++                  <input
++                    type="date"
++                    value={form.end_date}
++                    onChange={(e) => setForm((p) => ({ ...p, end_date: e.target.value }))}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                    required
++                  />
++                </div>
++              </div>
++              <textarea
++                placeholder="Reason (optional)"
++                value={form.reason}
++                onChange={(e) => setForm((p) => ({ ...p, reason: e.target.value }))}
++                rows={2}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++              />
++              <div className="flex justify-end gap-3">
++                <button
++                  type="button"
++                  onClick={() => setShowModal(false)}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
++                >
++                  Cancel
++                </button>
++                <button
++                  type="submit"
++                  disabled={saving}
++                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-70"
++                >
++                  {saving ? "Submitting..." : "Submit Request"}
++                </button>
++              </div>
++            </form>
++          </div>
++        </div>
++      ) : null}
++    </div>
++  );
++}
+diff --git a/src/app/dashboard/projects/page.js b/src/app/dashboard/projects/page.js
+index d07f7fc..94b0253 100644
+--- a/src/app/dashboard/projects/page.js
++++ b/src/app/dashboard/projects/page.js
+@@ -30,6 +30,16 @@ import {
+   updateProjectAssignment,
+   deleteProjectAssignment,
+   fetchProjectHistory,
++  fetchProjectBudgetBurn,
++  fetchProjectHealth,
++  cloneProject,
++  fetchChangeOrders,
++  createChangeOrder,
++  approveChangeOrder,
++  rejectChangeOrder,
++  deleteChangeOrder,
++  signoffMilestone,
++  fetchTasks,
+ } from "@/lib/api";
+ 
+ const initialAssignmentForm = { target_type: "user", target_id: "", role: "", allocation_percent: "" };
+@@ -53,6 +63,34 @@ const RISK_STYLES = {
+   high: "bg-rose-100 text-rose-700",
+ };
+ 
++const HEALTH_STYLES = {
++  green: "bg-emerald-100 text-emerald-700",
++  amber: "bg-amber-100 text-amber-700",
++  red: "bg-rose-100 text-rose-700",
++};
++
++const BUDGET_STATUS_STYLES = {
++  on_track: "bg-emerald-500",
++  at_risk: "bg-amber-500",
++  over_budget: "bg-rose-500",
++  hours_only: "bg-slate-400",
++  no_budget: "bg-slate-300",
++};
++
++const CHANGE_ORDER_TYPES = ["scope_change", "fee_adjustment", "timeline_extension", "other"];
++
++const CHANGE_ORDER_STATUS_STYLES = {
++  pending: "bg-amber-100 text-amber-700",
++  approved: "bg-emerald-100 text-emerald-700",
++  rejected: "bg-rose-100 text-rose-700",
++};
++
++const APPROVAL_STATUS_STYLES = {
++  pending: "bg-slate-100 text-slate-600",
++  approved: "bg-emerald-100 text-emerald-700",
++  rejected: "bg-rose-100 text-rose-700",
++};
++
+ const initialProjectForm = {
+   name: "",
+   client_id: "",
+@@ -70,6 +108,7 @@ const initialProjectForm = {
+   deliverables: "",
+   stakeholders: "",
+   billing_notes: "",
++  close_out_notes: "",
+ };
+ 
+ const initialMilestoneForm = { name: "", description: "", due_date: "", status: "pending" };
+@@ -87,6 +126,25 @@ const initialContractForm = {
+ 
+ const initialTimeForm = { hours: "", entry_date: "", billable: true, notes: "" };
+ 
++const initialChangeOrderForm = {
++  contract_id: "",
++  title: "",
++  description: "",
++  change_type: "scope_change",
++  amount_delta: "",
++  hours_delta: "",
++  requested_date: "",
++};
++
++const initialCloneForm = {
++  name: "",
++  start_date: "",
++  end_date: "",
++  include_team: true,
++  include_milestones: true,
++  include_tasks: false,
++};
++
+ function formatMoney(value) {
+   if (value === null || value === undefined || value === "") return "—";
+   return `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+@@ -154,6 +212,18 @@ export default function ProjectsPage() {
+   const [history, setHistory] = useState([]);
+   const [historyLoading, setHistoryLoading] = useState(false);
+ 
++  const [budgetBurn, setBudgetBurn] = useState(null);
++  const [health, setHealth] = useState(null);
++  const [projectTasks, setProjectTasks] = useState([]);
++
++  const [changeOrders, setChangeOrders] = useState([]);
++  const [showChangeOrderModal, setShowChangeOrderModal] = useState(false);
++  const [changeOrderForm, setChangeOrderForm] = useState(initialChangeOrderForm);
++
++  const [showCloneModal, setShowCloneModal] = useState(false);
++  const [cloneForm, setCloneForm] = useState(initialCloneForm);
++  const [cloning, setCloning] = useState(false);
++
+   async function loadProjects() {
+     try {
+       setLoading(true);
+@@ -192,13 +262,17 @@ export default function ProjectsPage() {
+     setActiveTab("overview");
+     setHistoryLoading(true);
+     try {
+-      const [ms, cs, te, util, as, hist] = await Promise.all([
++      const [ms, cs, te, util, as, hist, burn, hp, cos, tks] = await Promise.all([
+         fetchMilestones({ project_id: project.id }),
+         fetchContracts({ project_id: project.id }),
+         fetchTimeEntries({ project_id: project.id }),
+         fetchProjectUtilization(project.id).catch(() => null),
+         fetchProjectAssignments(project.id).catch(() => []),
+         fetchProjectHistory(project.id).catch(() => []),
++        fetchProjectBudgetBurn(project.id).catch(() => null),
++        fetchProjectHealth(project.id).catch(() => null),
++        fetchChangeOrders({ project_id: project.id }).catch(() => []),
++        fetchTasks({ project_id: project.id }).catch(() => []),
+       ]);
+       setMilestones(ms);
+       setContracts(cs);
+@@ -206,6 +280,10 @@ export default function ProjectsPage() {
+       setUtilization(util);
+       setAssignments(as);
+       setHistory(hist);
++      setBudgetBurn(burn);
++      setHealth(hp);
++      setChangeOrders(cos);
++      setProjectTasks(tks);
+ 
+       const margins = {};
+       await Promise.all(
+@@ -262,9 +340,10 @@ export default function ProjectsPage() {
+       deliverables: project.deliverables || "",
+       stakeholders: project.stakeholders || "",
+       billing_notes: project.billing_notes || "",
++      close_out_notes: project.close_out_notes || "",
+     });
+     setShowMoreProjectDetail(
+-      Boolean(project.objectives || project.deliverables || project.stakeholders || project.billing_notes)
++      Boolean(project.objectives || project.deliverables || project.stakeholders || project.billing_notes || project.close_out_notes)
+     );
+     setShowProjectModal(true);
+   }
+@@ -296,6 +375,7 @@ export default function ProjectsPage() {
+         deliverables: projectForm.deliverables || undefined,
+         stakeholders: projectForm.stakeholders || undefined,
+         billing_notes: projectForm.billing_notes || undefined,
++        close_out_notes: projectForm.close_out_notes || undefined,
+       };
+       if (editingProject) {
+         await updateProject(editingProject.id, payload);
+@@ -428,6 +508,123 @@ export default function ProjectsPage() {
+     }
+   }
+ 
++  async function handleMilestoneSignoff(milestone, status) {
++    try {
++      setError("");
++      let reason;
++      if (status === "rejected") {
++        reason = window.prompt("Reason for rejecting sign-off (optional):") || undefined;
++      }
++      await signoffMilestone(milestone.id, { status, reason });
++      await refreshDetail();
++    } catch (err) {
++      setError(err.message || "Failed to update sign-off status");
++    }
++  }
++
++  // --- Change orders --------------------------------------------------------------
++
++  function openChangeOrderModal() {
++    const defaultContract = contracts[0];
++    setChangeOrderForm({
++      ...initialChangeOrderForm,
++      contract_id: defaultContract ? String(defaultContract.id) : "",
++    });
++    setShowChangeOrderModal(true);
++  }
++
++  async function handleCreateChangeOrder(e) {
++    e.preventDefault();
++    if (!changeOrderForm.contract_id) return;
++    try {
++      setSaving(true);
++      setError("");
++      await createChangeOrder({
++        contract_id: Number(changeOrderForm.contract_id),
++        title: changeOrderForm.title,
++        description: changeOrderForm.description || undefined,
++        change_type: changeOrderForm.change_type,
++        amount_delta: changeOrderForm.amount_delta !== "" ? Number(changeOrderForm.amount_delta) : undefined,
++        hours_delta: changeOrderForm.hours_delta !== "" ? Number(changeOrderForm.hours_delta) : undefined,
++        requested_date: changeOrderForm.requested_date || undefined,
++      });
++      setChangeOrderForm(initialChangeOrderForm);
++      setShowChangeOrderModal(false);
++      await refreshDetail();
++    } catch (err) {
++      setError(err.message || "Failed to create change order");
++    } finally {
++      setSaving(false);
++    }
++  }
++
++  async function handleApproveChangeOrder(co) {
++    try {
++      setError("");
++      await approveChangeOrder(co.id);
++      await refreshDetail();
++    } catch (err) {
++      setError(err.message || "Failed to approve change order");
++    }
++  }
++
++  async function handleRejectChangeOrder(co) {
++    try {
++      setError("");
++      const reason = window.prompt("Reason for rejecting (optional):") || undefined;
++      await rejectChangeOrder(co.id, { reason });
++      await refreshDetail();
++    } catch (err) {
++      setError(err.message || "Failed to reject change order");
++    }
++  }
++
++  async function handleDeleteChangeOrder(co) {
++    try {
++      setError("");
++      await deleteChangeOrder(co.id);
++      await refreshDetail();
++    } catch (err) {
++      setError(err.message || "Failed to delete change order");
++    }
++  }
++
++  // --- Clone engagement -------------------------------------------------------------
++
++  function openCloneModal() {
++    if (!selectedProject) return;
++    setCloneForm({
++      ...initialCloneForm,
++      name: `${selectedProject.name} (Copy)`,
++    });
++    setShowCloneModal(true);
++  }
++
++  async function handleCloneProject(e) {
++    e.preventDefault();
++    if (!selectedProject) return;
++    try {
++      setCloning(true);
++      setError("");
++      const result = await cloneProject(selectedProject.id, {
++        name: cloneForm.name || undefined,
++        start_date: cloneForm.start_date ? new Date(cloneForm.start_date).toISOString() : undefined,
++        end_date: cloneForm.end_date ? new Date(cloneForm.end_date).toISOString() : undefined,
++        include_team: cloneForm.include_team,
++        include_milestones: cloneForm.include_milestones,
++        include_tasks: cloneForm.include_tasks,
++      });
++      setShowCloneModal(false);
++      setCloneForm(initialCloneForm);
++      await loadProjects();
++      if (result?.project) await loadProjectDetail(result.project);
++    } catch (err) {
++      setError(err.message || "Failed to clone engagement");
++    } finally {
++      setCloning(false);
++    }
++  }
++
+   // --- Contracts ----------------------------------------------------------------
+ 
+   async function handleCreateContract(e) {
+@@ -536,13 +733,15 @@ export default function ProjectsPage() {
+     () => [
+       { id: "overview", label: "Overview" },
+       { id: "team", label: `Team (${assignments.length})` },
++      { id: "timeline", label: "Timeline" },
+       { id: "milestones", label: `Milestones (${milestones.length})` },
+       { id: "contracts", label: `Contracts (${contracts.length})` },
++      { id: "changeOrders", label: `Change Orders (${changeOrders.length})` },
+       { id: "time", label: `Time (${timeEntries.length})` },
+       { id: "template", label: "Apply Template" },
+       { id: "history", label: "History" },
+     ],
+-    [assignments.length, milestones.length, contracts.length, timeEntries.length]
++    [assignments.length, milestones.length, contracts.length, timeEntries.length, changeOrders.length]
+   );
+ 
+   return (
+@@ -725,6 +924,22 @@ export default function ProjectsPage() {
+                   <h2 className="text-lg font-semibold text-slate-900">{selectedProject.name}</h2>
+                   <p className="text-sm text-slate-500">{clientLabel(selectedProject.client_id)}</p>
+                 </div>
++                <div className="flex shrink-0 items-center gap-2">
++                  {health ? (
++                    <span
++                      title={health.reasons?.join("; ")}
++                      className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${HEALTH_STYLES[health.health] || HEALTH_STYLES.green}`}
++                    >
++                      {health.health}
++                    </span>
++                  ) : null}
++                  <button
++                    onClick={openCloneModal}
++                    className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
++                  >
++                    Clone Engagement
++                  </button>
++                </div>
+               </div>
+ 
+               <div className="mt-4 flex flex-wrap gap-2 border-b border-slate-200 pb-3">
+@@ -745,6 +960,42 @@ export default function ProjectsPage() {
+ 
+               {activeTab === "overview" ? (
+                 <div className="mt-4 space-y-3">
++                  {budgetBurn ? (
++                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
++                      <div className="flex items-center justify-between text-xs">
++                        <p className="font-semibold uppercase tracking-wide text-slate-400">
++                          Budget Burn
++                        </p>
++                        <p
++                          className={`rounded-full px-2 py-0.5 font-semibold capitalize ${
++                            budgetBurn.alert ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"
++                          }`}
++                        >
++                          {budgetBurn.status.replace("_", " ")}
++                        </p>
++                      </div>
++                      {budgetBurn.percent_consumed !== null && budgetBurn.percent_consumed !== undefined ? (
++                        <>
++                          <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200">
++                            <div
++                              className={`h-2 rounded-full ${BUDGET_STATUS_STYLES[budgetBurn.status] || BUDGET_STATUS_STYLES.on_track}`}
++                              style={{ width: `${Math.min(100, budgetBurn.percent_consumed)}%` }}
++                            />
++                          </div>
++                          <p className="mt-1 text-xs text-slate-600">
++                            {budgetBurn.percent_consumed.toFixed(1)}% of budget consumed
++                            {budgetBurn.cost_to_date !== null ? ` (${formatMoney(budgetBurn.cost_to_date)} to date)` : ""}
++                          </p>
++                        </>
++                      ) : (
++                        <p className="mt-1 text-xs text-slate-500">
++                          {budgetBurn.status === "no_budget"
++                            ? "No budget set on this engagement."
++                            : "Logged hours don't yet have an hourly rate to translate into cost."}
++                        </p>
++                      )}
++                    </div>
++                  ) : null}
+                   <div className="grid grid-cols-2 gap-3 text-sm">
+                     <div>
+                       <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Budget</p>
+@@ -818,6 +1069,119 @@ export default function ProjectsPage() {
+                       ) : null}
+                     </div>
+                   ) : null}
++                  {selectedProject.status === "completed" || selectedProject.close_out_notes ? (
++                    <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
++                      <p className="text-xs font-semibold uppercase tracking-wide text-blue-500">
++                        Close-out Notes
++                      </p>
++                      <p className="mt-1 whitespace-pre-wrap text-sm text-slate-800">
++                        {selectedProject.close_out_notes || "No retrospective notes recorded yet — add them via Edit."}
++                      </p>
++                    </div>
++                  ) : null}
++                </div>
++              ) : null}
++
++              {activeTab === "timeline" ? (
++                <div className="mt-4 space-y-4">
++                  {(() => {
++                    const startMs = selectedProject.start_date ? new Date(selectedProject.start_date).getTime() : null;
++                    const endMs = selectedProject.end_date ? new Date(selectedProject.end_date).getTime() : null;
++                    if (!startMs || !endMs || endMs <= startMs) {
++                      return (
++                        <p className="text-sm text-slate-400">
++                          Set a start and end date on this engagement to see a timeline.
++                        </p>
++                      );
++                    }
++                    const span = endMs - startMs;
++                    const pct = (ms) => Math.min(100, Math.max(0, ((ms - startMs) / span) * 100));
++                    const todayPct = pct(Date.now());
++                    const rows = [
++                      ...milestones.map((m) => ({
++                        kind: "milestone",
++                        key: `m-${m.id}`,
++                        label: m.name,
++                        status: m.status,
++                        at: m.due_date ? new Date(m.due_date).getTime() : null,
++                      })),
++                      ...projectTasks.map((t) => ({
++                        kind: "task",
++                        key: `t-${t.id}`,
++                        label: t.title,
++                        status: t.status,
++                        startAt: t.created_at ? new Date(t.created_at).getTime() : startMs,
++                        at: t.due_date ? new Date(t.due_date).getTime() : null,
++                      })),
++                    ].filter((r) => r.at !== null);
++
++                    return (
++                      <div className="space-y-2">
++                        <div className="relative h-8 rounded-xl bg-slate-100">
++                          <div className="absolute inset-y-0 left-0 flex items-center pl-2 text-[10px] font-semibold text-slate-400">
++                            {formatDate(selectedProject.start_date)}
++                          </div>
++                          <div className="absolute inset-y-0 right-0 flex items-center pr-2 text-[10px] font-semibold text-slate-400">
++                            {formatDate(selectedProject.end_date)}
++                          </div>
++                          {todayPct >= 0 && todayPct <= 100 ? (
++                            <div
++                              className="absolute inset-y-0 w-0.5 bg-slate-900"
++                              style={{ left: `${todayPct}%` }}
++                              title="Today"
++                            />
++                          ) : null}
++                        </div>
++                        <div className="max-h-80 space-y-1.5 overflow-y-auto">
++                          {rows.length === 0 ? (
++                            <p className="text-sm text-slate-400">
++                              No dated milestones or tasks to plot on the timeline yet.
++                            </p>
++                          ) : (
++                            rows
++                              .sort((a, b) => a.at - b.at)
++                              .map((r) => (
++                                <div key={r.key} className="flex items-center gap-2">
++                                  <span
++                                    className={`w-24 shrink-0 truncate text-xs ${r.kind === "milestone" ? "font-semibold text-slate-700" : "text-slate-500"}`}
++                                    title={r.label}
++                                  >
++                                    {r.label}
++                                  </span>
++                                  <div className="relative h-4 flex-1 rounded-full bg-slate-50">
++                                    {r.kind === "task" ? (
++                                      <div
++                                        className={`absolute inset-y-0 rounded-full ${r.status === "done" ? "bg-emerald-300" : "bg-blue-300"}`}
++                                        style={{
++                                          left: `${pct(Math.min(r.startAt, r.at))}%`,
++                                          width: `${Math.max(1.5, pct(r.at) - pct(Math.min(r.startAt, r.at)))}%`,
++                                        }}
++                                        title={`${r.label} — due ${formatDate(r.at)}`}
++                                      />
++                                    ) : (
++                                      <div
++                                        className={`absolute top-1/2 h-3 w-3 -translate-y-1/2 rotate-45 ${
++                                          r.status === "achieved"
++                                            ? "bg-emerald-500"
++                                            : r.status === "missed"
++                                            ? "bg-rose-500"
++                                            : "bg-slate-400"
++                                        }`}
++                                        style={{ left: `calc(${pct(r.at)}% - 6px)` }}
++                                        title={`${r.label} — due ${formatDate(r.at)}`}
++                                      />
++                                    )}
++                                  </div>
++                                </div>
++                              ))
++                          )}
++                        </div>
++                        <p className="text-xs text-slate-400">
++                          Diamonds are milestones; bars are tasks (created date → due date). Vertical line marks today.
++                        </p>
++                      </div>
++                    );
++                  })()}
+                 </div>
+               ) : null}
+ 
+@@ -960,15 +1324,49 @@ export default function ProjectsPage() {
+                               Delete
+                             </button>
+                           </div>
+-                          <select
+-                            value={m.status}
+-                            onChange={(e) => handleMilestoneStatus(m, e.target.value)}
+-                            className="mt-2 rounded-lg border border-slate-300 px-2 py-1 text-xs outline-none focus:border-slate-900"
+-                          >
+-                            <option value="pending">Pending</option>
+-                            <option value="achieved">Achieved</option>
+-                            <option value="missed">Missed</option>
+-                          </select>
++                          <div className="mt-2 flex flex-wrap items-center gap-2">
++                            <select
++                              value={m.status}
++                              onChange={(e) => handleMilestoneStatus(m, e.target.value)}
++                              className="rounded-lg border border-slate-300 px-2 py-1 text-xs outline-none focus:border-slate-900"
++                            >
++                              <option value="pending">Pending</option>
++                              <option value="achieved">Achieved</option>
++                              <option value="missed">Missed</option>
++                            </select>
++                            <span
++                              className={`rounded-full px-2 py-1 text-[10px] font-semibold capitalize ${APPROVAL_STATUS_STYLES[m.approval_status] || APPROVAL_STATUS_STYLES.pending}`}
++                            >
++                              Client sign-off: {m.approval_status || "pending"}
++                            </span>
++                          </div>
++                          {m.approval_status === "rejected" && m.rejection_reason ? (
++                            <p className="mt-1 text-xs text-rose-600">Reason: {m.rejection_reason}</p>
++                          ) : null}
++                          <div className="mt-2 flex gap-2">
++                            <button
++                              onClick={() => handleMilestoneSignoff(m, "approved")}
++                              disabled={m.approval_status === "approved"}
++                              className="text-xs font-semibold text-emerald-600 hover:underline disabled:opacity-40"
++                            >
++                              Approve
++                            </button>
++                            <button
++                              onClick={() => handleMilestoneSignoff(m, "rejected")}
++                              disabled={m.approval_status === "rejected"}
++                              className="text-xs font-semibold text-rose-600 hover:underline disabled:opacity-40"
++                            >
++                              Reject
++                            </button>
++                            {m.approval_status && m.approval_status !== "pending" ? (
++                              <button
++                                onClick={() => handleMilestoneSignoff(m, "pending")}
++                                className="text-xs font-semibold text-slate-500 hover:underline"
++                              >
++                                Reset
++                              </button>
++                            ) : null}
++                          </div>
+                         </div>
+                       ))
+                     )}
+@@ -1032,6 +1430,84 @@ export default function ProjectsPage() {
+                 </div>
+               ) : null}
+ 
++              {activeTab === "changeOrders" ? (
++                <div className="mt-4 space-y-3">
++                  {contracts.length === 0 ? (
++                    <p className="text-sm text-slate-400">
++                      Add a contract first — change orders are scoped to a contract.
++                    </p>
++                  ) : (
++                    <button
++                      onClick={openChangeOrderModal}
++                      className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
++                    >
++                      + Add Change Order
++                    </button>
++                  )}
++                  <div className="max-h-72 space-y-2 overflow-y-auto">
++                    {changeOrders.length === 0 ? (
++                      <p className="text-sm text-slate-400">No change orders yet.</p>
++                    ) : (
++                      changeOrders.map((co) => (
++                        <div key={co.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
++                          <div className="flex items-start justify-between gap-2">
++                            <div>
++                              <p className="text-sm font-medium text-slate-800">{co.title}</p>
++                              <p className="text-xs capitalize text-slate-500">
++                                {co.change_type.replace("_", " ")}
++                                {co.requested_date ? ` · requested ${formatDate(co.requested_date)}` : ""}
++                              </p>
++                            </div>
++                            <span
++                              className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold capitalize ${CHANGE_ORDER_STATUS_STYLES[co.status] || CHANGE_ORDER_STATUS_STYLES.pending}`}
++                            >
++                              {co.status}
++                            </span>
++                          </div>
++                          {co.description ? (
++                            <p className="mt-1 text-xs text-slate-600">{co.description}</p>
++                          ) : null}
++                          <p className="mt-1 text-xs text-slate-700">
++                            {co.amount_delta !== null && co.amount_delta !== undefined
++                              ? `${Number(co.amount_delta) >= 0 ? "+" : ""}${formatMoney(co.amount_delta)}`
++                              : ""}
++                            {co.hours_delta !== null && co.hours_delta !== undefined
++                              ? ` · ${Number(co.hours_delta) >= 0 ? "+" : ""}${co.hours_delta}h`
++                              : ""}
++                          </p>
++                          {co.status === "pending" ? (
++                            <div className="mt-2 flex gap-3">
++                              <button
++                                onClick={() => handleApproveChangeOrder(co)}
++                                className="text-xs font-semibold text-emerald-600 hover:underline"
++                              >
++                                Approve
++                              </button>
++                              <button
++                                onClick={() => handleRejectChangeOrder(co)}
++                                className="text-xs font-semibold text-rose-600 hover:underline"
++                              >
++                                Reject
++                              </button>
++                              <button
++                                onClick={() => handleDeleteChangeOrder(co)}
++                                className="text-xs font-semibold text-slate-500 hover:underline"
++                              >
++                                Delete
++                              </button>
++                            </div>
++                          ) : (
++                            <p className="mt-2 text-[11px] text-slate-400">
++                              Decided by {co.decided_by_name || co.decided_by_email || "—"} on {formatDate(co.decided_at)}
++                            </p>
++                          )}
++                        </div>
++                      ))
++                    )}
++                  </div>
++                </div>
++              ) : null}
++
+               {activeTab === "time" ? (
+                 <div className="mt-4 space-y-3">
+                   <button
+@@ -1403,6 +1879,17 @@ export default function ProjectsPage() {
+                       className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+                     />
+                   </div>
++                  <div>
++                    <label className="mb-2 block text-sm font-medium text-slate-700">Close-out Notes</label>
++                    <textarea
++                      name="close_out_notes"
++                      value={projectForm.close_out_notes}
++                      onChange={handleProjectFormChange}
++                      rows={3}
++                      placeholder="Retrospective — what went well, what to change next time"
++                      className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                    />
++                  </div>
+                 </div>
+               ) : null}
+ 
+@@ -1647,6 +2134,201 @@ export default function ProjectsPage() {
+           </div>
+         </div>
+       ) : null}
++
++      {showChangeOrderModal ? (
++        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
++          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
++            <div className="mb-4 flex items-start justify-between gap-4">
++              <h2 className="text-xl font-bold text-slate-900">Add Change Order</h2>
++              <button
++                onClick={() => setShowChangeOrderModal(false)}
++                className="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-600 hover:bg-slate-100"
++              >
++                Close
++              </button>
++            </div>
++            <form onSubmit={handleCreateChangeOrder} className="space-y-4">
++              <div>
++                <label className="mb-2 block text-sm font-medium text-slate-700">Contract</label>
++                <select
++                  value={changeOrderForm.contract_id}
++                  onChange={(e) => setChangeOrderForm((p) => ({ ...p, contract_id: e.target.value }))}
++                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  required
++                >
++                  <option value="" disabled>
++                    Select a contract
++                  </option>
++                  {contracts.map((c) => (
++                    <option key={c.id} value={c.id}>
++                      {c.name || `Contract #${c.id}`} — {formatMoney(c.value)}
++                    </option>
++                  ))}
++                </select>
++              </div>
++              <input
++                type="text"
++                placeholder="Title"
++                value={changeOrderForm.title}
++                onChange={(e) => setChangeOrderForm((p) => ({ ...p, title: e.target.value }))}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                required
++              />
++              <textarea
++                placeholder="Description (optional)"
++                value={changeOrderForm.description}
++                onChange={(e) => setChangeOrderForm((p) => ({ ...p, description: e.target.value }))}
++                rows={2}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++              />
++              <select
++                value={changeOrderForm.change_type}
++                onChange={(e) => setChangeOrderForm((p) => ({ ...p, change_type: e.target.value }))}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++              >
++                {CHANGE_ORDER_TYPES.map((t) => (
++                  <option key={t} value={t}>
++                    {t.replace("_", " ")}
++                  </option>
++                ))}
++              </select>
++              <div className="grid grid-cols-2 gap-3">
++                <input
++                  type="number"
++                  step="0.01"
++                  placeholder="Amount delta ($)"
++                  value={changeOrderForm.amount_delta}
++                  onChange={(e) => setChangeOrderForm((p) => ({ ...p, amount_delta: e.target.value }))}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                />
++                <input
++                  type="number"
++                  step="0.25"
++                  placeholder="Hours delta"
++                  value={changeOrderForm.hours_delta}
++                  onChange={(e) => setChangeOrderForm((p) => ({ ...p, hours_delta: e.target.value }))}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                />
++              </div>
++              <div>
++                <label className="mb-2 block text-sm font-medium text-slate-700">Requested Date</label>
++                <input
++                  type="date"
++                  value={changeOrderForm.requested_date}
++                  onChange={(e) => setChangeOrderForm((p) => ({ ...p, requested_date: e.target.value }))}
++                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                />
++              </div>
++              <div className="flex justify-end gap-3">
++                <button
++                  type="button"
++                  onClick={() => setShowChangeOrderModal(false)}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
++                >
++                  Cancel
++                </button>
++                <button
++                  type="submit"
++                  disabled={saving}
++                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-70"
++                >
++                  {saving ? "Saving..." : "Add Change Order"}
++                </button>
++              </div>
++            </form>
++          </div>
++        </div>
++      ) : null}
++
++      {showCloneModal ? (
++        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
++          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
++            <div className="mb-4 flex items-start justify-between gap-4">
++              <h2 className="text-xl font-bold text-slate-900">Clone Engagement</h2>
++              <button
++                onClick={() => setShowCloneModal(false)}
++                className="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-600 hover:bg-slate-100"
++              >
++                Close
++              </button>
++            </div>
++            <p className="mb-4 text-xs text-slate-500">
++              Useful for recurring work like an annual audit — copies the engagement setup with new dates.
++            </p>
++            <form onSubmit={handleCloneProject} className="space-y-4">
++              <input
++                type="text"
++                placeholder="New engagement name"
++                value={cloneForm.name}
++                onChange={(e) => setCloneForm((p) => ({ ...p, name: e.target.value }))}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++              />
++              <div className="grid grid-cols-2 gap-3">
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">Start Date</label>
++                  <input
++                    type="date"
++                    value={cloneForm.start_date}
++                    onChange={(e) => setCloneForm((p) => ({ ...p, start_date: e.target.value }))}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  />
++                </div>
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">End Date</label>
++                  <input
++                    type="date"
++                    value={cloneForm.end_date}
++                    onChange={(e) => setCloneForm((p) => ({ ...p, end_date: e.target.value }))}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  />
++                </div>
++              </div>
++              <div className="space-y-2">
++                <label className="flex items-center gap-2 text-sm text-slate-700">
++                  <input
++                    type="checkbox"
++                    checked={cloneForm.include_team}
++                    onChange={(e) => setCloneForm((p) => ({ ...p, include_team: e.target.checked }))}
++                  />
++                  Copy team assignments
++                </label>
++                <label className="flex items-center gap-2 text-sm text-slate-700">
++                  <input
++                    type="checkbox"
++                    checked={cloneForm.include_milestones}
++                    onChange={(e) => setCloneForm((p) => ({ ...p, include_milestones: e.target.checked }))}
++                  />
++                  Copy milestones
++                </label>
++                <label className="flex items-center gap-2 text-sm text-slate-700">
++                  <input
++                    type="checkbox"
++                    checked={cloneForm.include_tasks}
++                    onChange={(e) => setCloneForm((p) => ({ ...p, include_tasks: e.target.checked }))}
++                  />
++                  Copy open tasks
++                </label>
++              </div>
++              <div className="flex justify-end gap-3">
++                <button
++                  type="button"
++                  onClick={() => setShowCloneModal(false)}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
++                >
++                  Cancel
++                </button>
++                <button
++                  type="submit"
++                  disabled={cloning}
++                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-70"
++                >
++                  {cloning ? "Cloning..." : "Clone Engagement"}
++                </button>
++              </div>
++            </form>
++          </div>
++        </div>
++      ) : null}
+     </div>
+   );
+ }
+diff --git a/src/app/dashboard/resource-requests/page.js b/src/app/dashboard/resource-requests/page.js
+new file mode 100644
+index 0000000..d4660a6
+--- /dev/null
++++ b/src/app/dashboard/resource-requests/page.js
+@@ -0,0 +1,403 @@
++"use client";
++
++import { useEffect, useState } from "react";
++import {
++  fetchCurrentUser,
++  fetchDepartments,
++  fetchProjects,
++  fetchUsers,
++  fetchResourceRequests,
++  createResourceRequest,
++  approveResourceRequest,
++  rejectResourceRequest,
++  cancelResourceRequest,
++} from "@/lib/api";
++
++function formatDate(value) {
++  if (!value) return "—";
++  return new Date(value).toLocaleDateString();
++}
++
++const STATUS_STYLES = {
++  pending: "bg-amber-100 text-amber-700",
++  approved: "bg-emerald-100 text-emerald-700",
++  rejected: "bg-rose-100 text-rose-700",
++  cancelled: "bg-slate-100 text-slate-500",
++};
++
++const initialForm = {
++  requesting_department_id: "",
++  providing_department_id: "",
++  project_id: "",
++  requested_user_id: "",
++  role_needed: "",
++  allocation_percent: "",
++  start_date: "",
++  end_date: "",
++  notes: "",
++};
++
++export default function ResourceRequestsPage() {
++  const [currentUser, setCurrentUser] = useState(null);
++  const [departments, setDepartments] = useState([]);
++  const [projects, setProjects] = useState([]);
++  const [users, setUsers] = useState([]);
++  const [usersError, setUsersError] = useState("");
++  const [requests, setRequests] = useState([]);
++  const [statusFilter, setStatusFilter] = useState("");
++  const [loading, setLoading] = useState(true);
++  const [error, setError] = useState("");
++  const [saving, setSaving] = useState(false);
++
++  const [showModal, setShowModal] = useState(false);
++  const [form, setForm] = useState(initialForm);
++
++  useEffect(() => {
++    fetchCurrentUser().then(setCurrentUser).catch(() => setCurrentUser(null));
++    fetchDepartments().then(setDepartments).catch(() => setDepartments([]));
++    fetchProjects().then(setProjects).catch(() => setProjects([]));
++    fetchUsers()
++      .then(setUsers)
++      .catch(() => setUsersError("Admin access required to see the full staff directory."));
++    load();
++  }, []);
++
++  async function load(overrideStatus) {
++    setLoading(true);
++    setError("");
++    try {
++      const status = overrideStatus !== undefined ? overrideStatus : statusFilter;
++      const data = await fetchResourceRequests(status ? { status } : {});
++      setRequests(data);
++    } catch (err) {
++      setError(err.message || "Failed to load resource requests");
++    } finally {
++      setLoading(false);
++    }
++  }
++
++  function deptName(id) {
++    return departments.find((d) => d.id === id)?.name || `Department #${id}`;
++  }
++
++  function projectName(id) {
++    return projects.find((p) => p.id === id)?.name || `Project #${id}`;
++  }
++
++  function userLabel(id) {
++    if (!id) return null;
++    return users.find((u) => u.id === id)?.name || `User #${id}`;
++  }
++
++  async function handleSubmit(e) {
++    e.preventDefault();
++    try {
++      setSaving(true);
++      setError("");
++      await createResourceRequest({
++        requesting_department_id: Number(form.requesting_department_id),
++        providing_department_id: Number(form.providing_department_id),
++        project_id: Number(form.project_id),
++        requested_user_id: form.requested_user_id ? Number(form.requested_user_id) : undefined,
++        role_needed: form.role_needed || undefined,
++        allocation_percent: form.allocation_percent !== "" ? Number(form.allocation_percent) : undefined,
++        start_date: form.start_date || undefined,
++        end_date: form.end_date || undefined,
++        notes: form.notes || undefined,
++      });
++      setShowModal(false);
++      setForm(initialForm);
++      await load();
++    } catch (err) {
++      setError(err.message || "Failed to submit resource request");
++    } finally {
++      setSaving(false);
++    }
++  }
++
++  async function handleApprove(req) {
++    try {
++      setError("");
++      await approveResourceRequest(req.id);
++      await load();
++    } catch (err) {
++      setError(err.message || "Failed to approve request");
++    }
++  }
++
++  async function handleReject(req) {
++    try {
++      setError("");
++      const notes = window.prompt("Reason for rejecting (optional):") || undefined;
++      await rejectResourceRequest(req.id, { notes });
++      await load();
++    } catch (err) {
++      setError(err.message || "Failed to reject request");
++    }
++  }
++
++  async function handleCancel(req) {
++    if (!window.confirm("Cancel this resource request?")) return;
++    try {
++      setError("");
++      await cancelResourceRequest(req.id);
++      await load();
++    } catch (err) {
++      setError(err.message || "Failed to cancel request");
++    }
++  }
++
++  return (
++    <div className="space-y-6">
++      <div className="flex items-start justify-between gap-4">
++        <div>
++          <h1 className="text-2xl font-bold text-slate-900">Cross-Department Resource Requests</h1>
++          <p className="text-sm text-slate-500">
++            Borrow a specialist from another department for one engagement, without moving them permanently.
++          </p>
++        </div>
++        <button
++          onClick={() => setShowModal(true)}
++          className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
++        >
++          + New Request
++        </button>
++      </div>
++
++      {error ? (
++        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
++          {error}
++        </div>
++      ) : null}
++
++      <div className="flex items-center gap-3">
++        <select
++          value={statusFilter}
++          onChange={(e) => {
++            setStatusFilter(e.target.value);
++            load(e.target.value);
++          }}
++          className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
++        >
++          <option value="">All statuses</option>
++          <option value="pending">Pending</option>
++          <option value="approved">Approved</option>
++          <option value="rejected">Rejected</option>
++          <option value="cancelled">Cancelled</option>
++        </select>
++      </div>
++
++      {loading ? (
++        <p className="text-sm text-slate-400">Loading...</p>
++      ) : requests.length === 0 ? (
++        <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-400">
++          No resource requests yet.
++        </div>
++      ) : (
++        <div className="space-y-3">
++          {requests.map((r) => (
++            <div key={r.id} className="rounded-3xl border border-slate-200 bg-white p-5">
++              <div className="flex items-start justify-between gap-3">
++                <div>
++                  <p className="text-sm font-medium text-slate-800">
++                    {deptName(r.requesting_department_id)} ← {deptName(r.providing_department_id)}
++                  </p>
++                  <p className="text-xs text-slate-500">
++                    {projectName(r.project_id)}
++                    {r.role_needed ? ` · ${r.role_needed}` : ""}
++                    {r.allocation_percent ? ` · ${r.allocation_percent}%` : ""}
++                  </p>
++                  {userLabel(r.requested_user_id) ? (
++                    <p className="text-xs text-slate-500">Requested: {userLabel(r.requested_user_id)}</p>
++                  ) : null}
++                  {r.start_date || r.end_date ? (
++                    <p className="text-xs text-slate-400">
++                      {formatDate(r.start_date)} – {formatDate(r.end_date)}
++                    </p>
++                  ) : null}
++                  {r.notes ? <p className="mt-1 text-xs text-slate-600">{r.notes}</p> : null}
++                </div>
++                <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold capitalize ${STATUS_STYLES[r.status] || STATUS_STYLES.pending}`}>
++                  {r.status}
++                </span>
++              </div>
++              <p className="mt-2 text-[11px] text-slate-400">
++                Requested by {r.requested_by_name} on {formatDate(r.created_at)}
++                {r.status !== "pending" && r.decided_by_name
++                  ? ` · Decided by ${r.decided_by_name} on ${formatDate(r.decided_at)}`
++                  : ""}
++              </p>
++              {r.status === "pending" ? (
++                <div className="mt-2 flex gap-3">
++                  <button onClick={() => handleApprove(r)} className="text-xs font-semibold text-emerald-600 hover:underline">
++                    Approve
++                  </button>
++                  <button onClick={() => handleReject(r)} className="text-xs font-semibold text-rose-600 hover:underline">
++                    Reject
++                  </button>
++                  <button onClick={() => handleCancel(r)} className="text-xs font-semibold text-slate-500 hover:underline">
++                    Cancel
++                  </button>
++                </div>
++              ) : null}
++            </div>
++          ))}
++        </div>
++      )}
++
++      {showModal ? (
++        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
++          <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
++            <div className="mb-4 flex items-start justify-between gap-4">
++              <h2 className="text-xl font-bold text-slate-900">New Resource Request</h2>
++              <button
++                onClick={() => setShowModal(false)}
++                className="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-600 hover:bg-slate-100"
++              >
++                Close
++              </button>
++            </div>
++            <form onSubmit={handleSubmit} className="space-y-4">
++              <div className="grid grid-cols-2 gap-3">
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">Requesting Dept.</label>
++                  <select
++                    value={form.requesting_department_id}
++                    onChange={(e) => setForm((p) => ({ ...p, requesting_department_id: e.target.value }))}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                    required
++                  >
++                    <option value="" disabled>
++                      Select
++                    </option>
++                    {departments.map((d) => (
++                      <option key={d.id} value={d.id}>
++                        {d.name}
++                      </option>
++                    ))}
++                  </select>
++                </div>
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">Providing Dept.</label>
++                  <select
++                    value={form.providing_department_id}
++                    onChange={(e) => setForm((p) => ({ ...p, providing_department_id: e.target.value }))}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                    required
++                  >
++                    <option value="" disabled>
++                      Select
++                    </option>
++                    {departments.map((d) => (
++                      <option key={d.id} value={d.id}>
++                        {d.name}
++                      </option>
++                    ))}
++                  </select>
++                </div>
++              </div>
++              <div>
++                <label className="mb-2 block text-sm font-medium text-slate-700">Engagement</label>
++                <select
++                  value={form.project_id}
++                  onChange={(e) => setForm((p) => ({ ...p, project_id: e.target.value }))}
++                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  required
++                >
++                  <option value="" disabled>
++                    Select an engagement
++                  </option>
++                  {projects.map((p) => (
++                    <option key={p.id} value={p.id}>
++                      {p.name}
++                    </option>
++                  ))}
++                </select>
++              </div>
++              <div>
++                <label className="mb-2 block text-sm font-medium text-slate-700">Specific Person (optional)</label>
++                {usersError ? (
++                  <p className="text-xs text-slate-400">{usersError}</p>
++                ) : (
++                  <select
++                    value={form.requested_user_id}
++                    onChange={(e) => setForm((p) => ({ ...p, requested_user_id: e.target.value }))}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  >
++                    <option value="">Any person in that role</option>
++                    {users.map((u) => (
++                      <option key={u.id} value={u.id}>
++                        {u.name} ({u.email})
++                      </option>
++                    ))}
++                  </select>
++                )}
++              </div>
++              <div className="grid grid-cols-2 gap-3">
++                <input
++                  type="text"
++                  placeholder="Role needed"
++                  value={form.role_needed}
++                  onChange={(e) => setForm((p) => ({ ...p, role_needed: e.target.value }))}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                />
++                <input
++                  type="number"
++                  min="1"
++                  max="100"
++                  placeholder="Allocation %"
++                  value={form.allocation_percent}
++                  onChange={(e) => setForm((p) => ({ ...p, allocation_percent: e.target.value }))}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                />
++              </div>
++              <div className="grid grid-cols-2 gap-3">
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">Start Date</label>
++                  <input
++                    type="date"
++                    value={form.start_date}
++                    onChange={(e) => setForm((p) => ({ ...p, start_date: e.target.value }))}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  />
++                </div>
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">End Date</label>
++                  <input
++                    type="date"
++                    value={form.end_date}
++                    onChange={(e) => setForm((p) => ({ ...p, end_date: e.target.value }))}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  />
++                </div>
++              </div>
++              <textarea
++                placeholder="Notes"
++                value={form.notes}
++                onChange={(e) => setForm((p) => ({ ...p, notes: e.target.value }))}
++                rows={2}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++              />
++              <div className="flex justify-end gap-3">
++                <button
++                  type="button"
++                  onClick={() => setShowModal(false)}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
++                >
++                  Cancel
++                </button>
++                <button
++                  type="submit"
++                  disabled={saving}
++                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-70"
++                >
++                  {saving ? "Submitting..." : "Submit Request"}
++                </button>
++              </div>
++            </form>
++          </div>
++        </div>
++      ) : null}
++    </div>
++  );
++}
+diff --git a/src/app/dashboard/skills/page.js b/src/app/dashboard/skills/page.js
+new file mode 100644
+index 0000000..4c4b930
+--- /dev/null
++++ b/src/app/dashboard/skills/page.js
+@@ -0,0 +1,408 @@
++"use client";
++
++import { useEffect, useMemo, useState } from "react";
++import {
++  fetchCurrentUser,
++  fetchDepartments,
++  fetchSkillsMatrix,
++  fetchUsers,
++  createSkill,
++  updateSkill,
++  deleteSkill,
++} from "@/lib/api";
++
++function formatDate(value) {
++  if (!value) return "—";
++  return new Date(value).toLocaleDateString();
++}
++
++function isExpiringSoon(expiry) {
++  if (!expiry) return false;
++  const days = (new Date(expiry).getTime() - Date.now()) / (1000 * 60 * 60 * 24);
++  return days >= 0 && days <= 60;
++}
++
++function isExpired(expiry) {
++  if (!expiry) return false;
++  return new Date(expiry).getTime() < Date.now();
++}
++
++const initialForm = {
++  user_id: "",
++  name: "",
++  category: "skill",
++  proficiency_level: "",
++  issued_date: "",
++  expiry_date: "",
++  notes: "",
++};
++
++export default function SkillsPage() {
++  const [currentUser, setCurrentUser] = useState(null);
++  const [isAdmin, setIsAdmin] = useState(false);
++  const [departments, setDepartments] = useState([]);
++  const [users, setUsers] = useState([]);
++  const [usersError, setUsersError] = useState("");
++  const [matrix, setMatrix] = useState([]);
++  const [deptFilter, setDeptFilter] = useState("");
++  const [nameFilter, setNameFilter] = useState("");
++  const [loading, setLoading] = useState(true);
++  const [error, setError] = useState("");
++  const [saving, setSaving] = useState(false);
++
++  const [showModal, setShowModal] = useState(false);
++  const [editingSkill, setEditingSkill] = useState(null);
++  const [form, setForm] = useState(initialForm);
++
++  useEffect(() => {
++    fetchCurrentUser()
++      .then((u) => {
++        setCurrentUser(u);
++        setIsAdmin(u?.role === "admin");
++      })
++      .catch(() => setCurrentUser(null));
++    fetchDepartments().then(setDepartments).catch(() => setDepartments([]));
++    fetchUsers()
++      .then(setUsers)
++      .catch(() => setUsersError("Admin access required to see the full staff directory."));
++    loadMatrix();
++  }, []);
++
++  async function loadMatrix(overrides = {}) {
++    setLoading(true);
++    setError("");
++    try {
++      const params = {
++        department_id: overrides.deptFilter ?? (deptFilter || undefined),
++        name: overrides.nameFilter ?? (nameFilter || undefined),
++      };
++      const data = await fetchSkillsMatrix(params);
++      setMatrix(data);
++    } catch (err) {
++      setError(err.message || "Failed to load skills matrix");
++    } finally {
++      setLoading(false);
++    }
++  }
++
++  function applyFilters() {
++    loadMatrix();
++  }
++
++  function userLabel(id) {
++    const u = users.find((x) => x.id === id);
++    return u ? `${u.name} (${u.email})` : `User #${id}`;
++  }
++
++  function openCreate(userId) {
++    setEditingSkill(null);
++    setForm({ ...initialForm, user_id: userId ? String(userId) : "" });
++    setShowModal(true);
++  }
++
++  function openEdit(entry, skill) {
++    setEditingSkill(skill);
++    setForm({
++      user_id: String(entry.user_id),
++      name: skill.name,
++      category: skill.category,
++      proficiency_level: skill.proficiency_level || "",
++      issued_date: skill.issued_date || "",
++      expiry_date: skill.expiry_date || "",
++      notes: skill.notes || "",
++    });
++    setShowModal(true);
++  }
++
++  async function handleSubmit(e) {
++    e.preventDefault();
++    try {
++      setSaving(true);
++      setError("");
++      const payload = {
++        user_id: Number(form.user_id),
++        name: form.name,
++        category: form.category,
++        proficiency_level: form.proficiency_level || undefined,
++        issued_date: form.issued_date || undefined,
++        expiry_date: form.expiry_date || undefined,
++        notes: form.notes || undefined,
++      };
++      if (editingSkill) {
++        await updateSkill(editingSkill.id, payload);
++      } else {
++        await createSkill(payload);
++      }
++      setShowModal(false);
++      await loadMatrix();
++    } catch (err) {
++      setError(err.message || "Failed to save entry");
++    } finally {
++      setSaving(false);
++    }
++  }
++
++  async function handleDelete(skill) {
++    if (!window.confirm(`Remove "${skill.name}"?`)) return;
++    try {
++      setError("");
++      await deleteSkill(skill.id);
++      await loadMatrix();
++    } catch (err) {
++      setError(err.message || "Failed to delete entry");
++    }
++  }
++
++  const totalEntries = useMemo(
++    () => matrix.reduce((sum, entry) => sum + entry.skills.length, 0),
++    [matrix]
++  );
++
++  return (
++    <div className="space-y-6">
++      <div className="flex flex-wrap items-start justify-between gap-4">
++        <div>
++          <h1 className="text-2xl font-bold text-slate-900">Skills &amp; Certifications</h1>
++          <p className="text-sm text-slate-500">
++            Staffing decisions, made data-driven — who can go on this engagement.
++          </p>
++        </div>
++        <button
++          onClick={() => openCreate(currentUser?.id)}
++          className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
++        >
++          + Add Skill / Certification
++        </button>
++      </div>
++
++      {error ? (
++        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
++          {error}
++        </div>
++      ) : null}
++
++      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4">
++        <select
++          value={deptFilter}
++          onChange={(e) => setDeptFilter(e.target.value)}
++          className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
++        >
++          <option value="">All departments</option>
++          {departments.map((d) => (
++            <option key={d.id} value={d.id}>
++              {d.name}
++            </option>
++          ))}
++        </select>
++        <input
++          type="text"
++          placeholder="Filter by skill/certification name"
++          value={nameFilter}
++          onChange={(e) => setNameFilter(e.target.value)}
++          className="flex-1 min-w-[200px] rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
++        />
++        <button
++          onClick={applyFilters}
++          className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
++        >
++          Apply
++        </button>
++        <span className="text-xs text-slate-400">{totalEntries} total entries</span>
++      </div>
++
++      {loading ? (
++        <p className="text-sm text-slate-400">Loading...</p>
++      ) : matrix.length === 0 ? (
++        <div className="rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-400">
++          No skills or certifications recorded yet.
++        </div>
++      ) : (
++        <div className="space-y-4">
++          {matrix.map((entry) => (
++            <div key={entry.user_id} className="rounded-3xl border border-slate-200 bg-white p-5">
++              <div className="flex items-start justify-between gap-3">
++                <div>
++                  <h3 className="text-sm font-semibold text-slate-900">{entry.user_name}</h3>
++                </div>
++                <button
++                  onClick={() => openCreate(entry.user_id)}
++                  className="text-xs font-semibold text-slate-700 hover:underline"
++                >
++                  + Add
++                </button>
++              </div>
++              {entry.skills.length === 0 ? (
++                <p className="mt-2 text-xs text-slate-400">No entries.</p>
++              ) : (
++                <div className="mt-3 flex flex-wrap gap-2">
++                  {entry.skills.map((s) => {
++                    const expired = isExpired(s.expiry_date);
++                    const expiring = !expired && isExpiringSoon(s.expiry_date);
++                    return (
++                      <div
++                        key={s.id}
++                        className={`rounded-xl border px-3 py-2 text-xs ${
++                          expired
++                            ? "border-rose-200 bg-rose-50"
++                            : expiring
++                            ? "border-amber-200 bg-amber-50"
++                            : "border-slate-200 bg-slate-50"
++                        }`}
++                      >
++                        <div className="flex items-center gap-2">
++                          <span className="font-semibold text-slate-800">{s.name}</span>
++                          <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-500">
++                            {s.category}
++                          </span>
++                        </div>
++                        {s.proficiency_level ? (
++                          <p className="mt-0.5 capitalize text-slate-500">{s.proficiency_level}</p>
++                        ) : null}
++                        {s.expiry_date ? (
++                          <p className={`mt-0.5 ${expired ? "text-rose-600" : expiring ? "text-amber-700" : "text-slate-500"}`}>
++                            {expired ? "Expired" : "Expires"} {formatDate(s.expiry_date)}
++                          </p>
++                        ) : null}
++                        <div className="mt-1 flex gap-2">
++                          <button
++                            onClick={() => openEdit(entry, s)}
++                            className="font-semibold text-slate-600 hover:underline"
++                          >
++                            Edit
++                          </button>
++                          <button
++                            onClick={() => handleDelete(s)}
++                            className="font-semibold text-rose-500 hover:underline"
++                          >
++                            Delete
++                          </button>
++                        </div>
++                      </div>
++                    );
++                  })}
++                </div>
++              )}
++            </div>
++          ))}
++        </div>
++      )}
++
++      {showModal ? (
++        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
++          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
++            <div className="mb-4 flex items-start justify-between gap-4">
++              <h2 className="text-xl font-bold text-slate-900">
++                {editingSkill ? "Edit Entry" : "Add Skill / Certification"}
++              </h2>
++              <button
++                onClick={() => setShowModal(false)}
++                className="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-600 hover:bg-slate-100"
++              >
++                Close
++              </button>
++            </div>
++            <form onSubmit={handleSubmit} className="space-y-4">
++              <div>
++                <label className="mb-2 block text-sm font-medium text-slate-700">Person</label>
++                {usersError ? (
++                  <input
++                    type="number"
++                    placeholder="User ID"
++                    value={form.user_id}
++                    onChange={(e) => setForm((p) => ({ ...p, user_id: e.target.value }))}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                    required
++                  />
++                ) : (
++                  <select
++                    value={form.user_id}
++                    onChange={(e) => setForm((p) => ({ ...p, user_id: e.target.value }))}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                    required
++                  >
++                    <option value="" disabled>
++                      Select a person
++                    </option>
++                    {users.map((u) => (
++                      <option key={u.id} value={u.id}>
++                        {u.name} ({u.email})
++                      </option>
++                    ))}
++                  </select>
++                )}
++              </div>
++              <input
++                type="text"
++                placeholder="Skill or certification name"
++                value={form.name}
++                onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                required
++              />
++              <div className="grid grid-cols-2 gap-3">
++                <select
++                  value={form.category}
++                  onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                >
++                  <option value="skill">Skill</option>
++                  <option value="certification">Certification</option>
++                </select>
++                <input
++                  type="text"
++                  placeholder="Proficiency level"
++                  value={form.proficiency_level}
++                  onChange={(e) => setForm((p) => ({ ...p, proficiency_level: e.target.value }))}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                />
++              </div>
++              <div className="grid grid-cols-2 gap-3">
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">Issued</label>
++                  <input
++                    type="date"
++                    value={form.issued_date}
++                    onChange={(e) => setForm((p) => ({ ...p, issued_date: e.target.value }))}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  />
++                </div>
++                <div>
++                  <label className="mb-2 block text-sm font-medium text-slate-700">Expires</label>
++                  <input
++                    type="date"
++                    value={form.expiry_date}
++                    onChange={(e) => setForm((p) => ({ ...p, expiry_date: e.target.value }))}
++                    className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++                  />
++                </div>
++              </div>
++              <textarea
++                placeholder="Notes"
++                value={form.notes}
++                onChange={(e) => setForm((p) => ({ ...p, notes: e.target.value }))}
++                rows={2}
++                className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
++              />
++              <div className="flex justify-end gap-3">
++                <button
++                  type="button"
++                  onClick={() => setShowModal(false)}
++                  className="rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
++                >
++                  Cancel
++                </button>
++                <button
++                  type="submit"
++                  disabled={saving}
++                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-70"
++                >
++                  {saving ? "Saving..." : "Save"}
++                </button>
++              </div>
++            </form>
++          </div>
++        </div>
++      ) : null}
++    </div>
++  );
++}
+diff --git a/src/lib/api.js b/src/lib/api.js
+index 96e583b..f977b4b 100644
+--- a/src/lib/api.js
++++ b/src/lib/api.js
+@@ -486,6 +486,7 @@ export function fetchTasks(params = {}) {
+   const searchParams = new URLSearchParams();
+   if (params.status) searchParams.append("status", params.status);
+   if (params.client_id) searchParams.append("client_id", params.client_id);
++  if (params.project_id) searchParams.append("project_id", params.project_id);
+   if (params.assigned_to_me) searchParams.append("assigned_to_me", "true");
+   if (params.overdue_only) searchParams.append("overdue_only", "true");
+   const qs = searchParams.toString();
+@@ -687,7 +688,14 @@ export const signoffMilestone = (id, payload) => apiSend(`/milestones/${id}/sign
+ 
+ // --- Task templates ------------------------------------------------------------------
+ 
+-export const fetchTaskTemplates = () => apiGet("/task-templates/");
++export function fetchTaskTemplates(params = {}) {
++  const searchParams = new URLSearchParams();
++  if (params.engagement_type) searchParams.append("engagement_type", params.engagement_type);
++  if (params.trigger_event) searchParams.append("trigger_event", params.trigger_event);
++  if (params.department_id) searchParams.append("department_id", params.department_id);
++  const qs = searchParams.toString();
++  return apiGet(`/task-templates/${qs ? `?${qs}` : ""}`);
++}
+ export const createTaskTemplate = (payload) => apiSend("/task-templates/", "POST", payload);
+ export const updateTaskTemplate = (id, payload) => apiSend(`/task-templates/${id}`, "PUT", payload);
+ export const deleteTaskTemplate = (id) => apiDelete(`/task-templates/${id}`);
+diff --git a/src/lib/nav.js b/src/lib/nav.js
+index ee7856b..6750e23 100644
+--- a/src/lib/nav.js
++++ b/src/lib/nav.js
+@@ -6,6 +6,10 @@ import {
+   ShieldCheck,
+   ListChecks,
+   Briefcase,
++  Building2,
++  Award,
++  CalendarClock,
++  Repeat,
+ } from "lucide-react";
+ 
+ export const navItems = [
+@@ -33,6 +37,30 @@ export const navItems = [
+     icon: ListChecks,
+     roles: ["admin", "staff"],
+   },
++  {
++    label: "Departments",
++    href: "/dashboard/departments",
++    icon: Building2,
++    roles: ["admin", "staff"],
++  },
++  {
++    label: "Skills",
++    href: "/dashboard/skills",
++    icon: Award,
++    roles: ["admin", "staff"],
++  },
++  {
++    label: "Leave",
++    href: "/dashboard/leave",
++    icon: CalendarClock,
++    roles: ["admin", "staff"],
++  },
++  {
++    label: "Resource Requests",
++    href: "/dashboard/resource-requests",
++    icon: Repeat,
++    roles: ["admin", "staff"],
++  },
+   {
+     label: "Files",
+     href: "/dashboard/files",
+-- 
+2.43.0
+
