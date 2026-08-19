@@ -1,6 +1,6 @@
 from app.core.time import utcnow
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String
 
 from app.db.session import Base
 
@@ -33,6 +33,14 @@ class User(Base):
     # system permissions, not organizational seniority.
     position = Column(String(30), nullable=True, index=True)
     manager_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+
+    # Standard hourly billing rate used to value WIP (work-in-progress) and
+    # compute realization rates when the engagement's contract doesn't
+    # itself carry an hourly rate (e.g. a fixed_fee contract still needs a
+    # "value of hours worked" figure to measure billed-vs-worked against).
+    # A contract-level hourly_rate, when present, always takes precedence
+    # over this for rate resolution -- see app.core.billing.
+    standard_billing_rate = Column(Numeric(10, 2), nullable=True)
 
     # Email verification
     is_verified = Column(Boolean, nullable=False, default=False)

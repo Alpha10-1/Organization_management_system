@@ -1,6 +1,7 @@
 import csv
 import io
-from datetime import timedelta
+from datetime import date as date_type, timedelta
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -8,6 +9,7 @@ from fpdf import FPDF
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
+from app.core.billing import compute_realization, money
 from app.core.client_health import compute_client_health
 from app.core.deps import get_current_active_user
 from app.core.time import utcnow
@@ -15,6 +17,7 @@ from app.db.session import get_db
 from app.models.activity_log import ActivityLog
 from app.models.client import Client
 from app.models.contract import Contract
+from app.models.department import Department
 from app.models.file_record import FileRecord
 from app.models.milestone import Milestone
 from app.models.project import Project
@@ -22,6 +25,7 @@ from app.models.project_assignment import ProjectAssignment
 from app.models.task import Task
 from app.models.time_entry import TimeEntry
 from app.models.user import User
+from app.schemas.invoice import RealizationReportOut
 from app.schemas.user import UserPublic
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
@@ -529,4 +533,65 @@ def capacity_dashboard(
         "under_allocated_count": sum(1 for p in people if p["status"] == "under_allocated"),
         "bench_count": sum(1 for p in people if p["status"] == "bench"),
         "people": people,
+    }
+
+
+@router.get("/realization", response_model=RealizationReportOut)
+def realization_report(
+    group_by: str = Query(default="project", pattern="^(project|partner|department)$"),
+    project_id: int | None = Query(default=None),
+    start_date: date_type | None = Query(default=None),
+    end_date: date_type | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    """Realization rate = billed value / worked value over the period,
+    rolled up by engagement, partner, or department. This is the
+    headline "are we actually capturing the revenue our people are
+    generating" number -- a rate well under 100% means work is being done
+    that never turns into an invoice.
+    """
+    department_by_project = None
+    if group_by == "department":
+        rows = (
+            db.query(Project.id, Client.department_id, Department.name)
+            .join(Client, Project.client_id == Client.id)
+            .outerjoin(Department, Client.department_id == Department.id)
+            .all()
+        )
+        department_by_project = {
+            project_id_: ((dept_id, dept_name) if dept_id is not None else None)
+            for project_id_, dept_id, dept_name in rows
+        }
+
+    result_rows = compute_realization(
+        db,
+        group_by=group_by,
+        start_date=start_date,
+        end_date=end_date,
+        project_id=project_id,
+        department_by_project=department_by_project,
+    )
+
+    firm_worked = sum((r.worked_value for r in result_rows), Decimal("0.00"))
+    firm_billed = sum((r.billed_value for r in result_rows), Decimal("0.00"))
+
+    return {
+        "group_by": group_by,
+        "start_date": start_date,
+        "end_date": end_date,
+        "firm_worked_value": firm_worked,
+        "firm_billed_value": firm_billed,
+        "firm_realization_rate": (firm_billed / firm_worked).quantize(Decimal("0.0001")) if firm_worked else None,
+        "rows": [
+            {
+                "key": r.key,
+                "label": r.label,
+                "worked_hours": r.worked_hours,
+                "worked_value": r.worked_value,
+                "billed_value": r.billed_value,
+                "realization_rate": r.realization_rate,
+            }
+            for r in result_rows
+        ],
     }

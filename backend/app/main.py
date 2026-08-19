@@ -12,6 +12,7 @@ from app.routes.comments import router as comments_router
 from app.routes.contracts import router as contracts_router
 from app.routes.departments import router as departments_router
 from app.routes.files import router as files_router
+from app.routes.invoices import router as invoices_router
 from app.routes.leave_requests import router as leave_requests_router
 from app.routes.milestones import router as milestones_router
 from app.routes.notifications import router as notifications_router
@@ -62,6 +63,7 @@ app.include_router(milestones_router)
 app.include_router(contracts_router)
 app.include_router(change_orders_router)
 app.include_router(time_entries_router)
+app.include_router(invoices_router)
 app.include_router(notifications_router)
 app.include_router(comments_router)
 app.include_router(search_router)

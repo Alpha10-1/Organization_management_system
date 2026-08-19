@@ -26,6 +26,14 @@ class TimeEntry(Base):
     billable = Column(Boolean, nullable=False, default=True, index=True)
     notes = Column(Text, nullable=True)
 
+    # Set once this entry has been pulled onto an invoice (see
+    # InvoiceLineItem). Null + billable=True is exactly the definition of
+    # "in WIP" -- worked, billable, not yet billed. Voiding or deleting the
+    # invoice clears this back to null so the hours return to WIP.
+    invoice_line_item_id = Column(
+        Integer, ForeignKey("invoice_line_items.id"), nullable=True, index=True
+    )
+
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
     deleted_at = Column(DateTime, nullable=True, index=True)

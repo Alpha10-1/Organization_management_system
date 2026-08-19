@@ -8,6 +8,7 @@ from app.db.session import get_db
 from app.models.user import POSITION_LEVELS, User
 from app.schemas.user import UserPublic
 from app.schemas.user_management import (
+    UserBillingRateUpdate,
     UserCreate,
     UserDepartmentUpdate,
     UserManagementOut,
@@ -232,6 +233,39 @@ def update_user_position(
         entity_id=target.id,
         title=f"Position changed: {target.name}",
         description=f"Set position to '{target.position or 'none'}' for '{target.email}'.",
+    )
+
+    return target
+
+
+@router.patch("/{email}/billing-rate", response_model=UserManagementOut)
+def update_user_billing_rate(
+    email: str,
+    payload: UserBillingRateUpdate,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(require_role("admin")),
+):
+    """Sets the standard hourly rate used to value this user's time when a
+    project's contract doesn't itself carry an hourly_rate -- see
+    app.core.billing.resolve_rate."""
+    target = get_user_by_email(db, email.lower())
+
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    target.standard_billing_rate = payload.standard_billing_rate
+
+    db.commit()
+    db.refresh(target)
+
+    log_activity(
+        db=db,
+        user=current_user,
+        action="user_billing_rate_updated",
+        entity_type="user",
+        entity_id=target.id,
+        title=f"Billing rate updated: {target.name}",
+        description=f"Set standard billing rate to {target.standard_billing_rate} for '{target.email}'.",
     )
 
     return target

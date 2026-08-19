@@ -16,6 +16,7 @@ from app.models.task_dependency import TaskDependency
 from app.models.task_template import TaskTemplate, TaskTemplateItem
 from app.models.milestone import Milestone
 from app.models.time_entry import TimeEntry
+from app.models.invoice import Invoice, InvoiceLineItem
 from app.models.notification import Notification
 from app.models.comment import Comment
 from app.models.sent_email import SentEmail

@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from pydantic import BaseModel, EmailStr
 
 class UserCreate(BaseModel):
@@ -30,6 +32,9 @@ class UserPositionUpdate(BaseModel):
     position: str | None = None
     manager_id: int | None = None
 
+class UserBillingRateUpdate(BaseModel):
+    standard_billing_rate: Decimal | None = None
+
 class UserManagementOut(BaseModel):
     id: int
     name: str
@@ -40,5 +45,6 @@ class UserManagementOut(BaseModel):
     position: str | None = None
     manager_id: int | None = None
     is_verified: bool = False
+    standard_billing_rate: Decimal | None = None
 
     model_config = {"from_attributes": True}

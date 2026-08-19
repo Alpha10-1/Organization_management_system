@@ -60,6 +60,7 @@ class TimeEntryOut(BaseModel):
     entry_date: date
     billable: bool
     notes: Optional[str] = None
+    invoice_line_item_id: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 
