@@ -192,6 +192,48 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
+### Optional: local S3-compatible storage (MinIO)
+
+File uploads default to local disk (`STORAGE_BACKEND=local`, the
+zero-config path — nothing below is required to run the app). To develop
+or test against the S3 code path without touching a real AWS bucket, this
+repo ships a `docker-compose.yml` that runs [MinIO](https://min.io/), an
+S3-compatible object store, plus a one-shot job that creates the bucket
+the backend expects.
+
+```bash
+docker compose up -d
+```
+
+- MinIO API: `http://localhost:9000`
+- MinIO Console: `http://localhost:9001` (login `minioadmin` / `minioadmin`)
+
+The `createbuckets` container exits right after creating the bucket —
+`docker compose ps` showing it as `Exited (0)` is expected, not a failure.
+
+Then point the backend at it (uncomment the "Local MinIO quickstart"
+block at the bottom of `backend/.env.example`, or set directly):
+
+```bash
+STORAGE_BACKEND=s3
+S3_BUCKET=oms-uploads
+S3_ENDPOINT_URL=http://localhost:9000
+S3_REGION=us-east-1
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+```
+
+Restart the backend and uploads now go to MinIO — visible in the console
+at `localhost:9001`. Switching back to local disk is just deleting/
+commenting those env vars (or setting `STORAGE_BACKEND=local`) and
+restarting; no code or data-model changes either way.
+
+To wipe the dev bucket and start over:
+
+```bash
+docker compose down -v
+```
+
 ---
 
 ## Frontend Setup (Next.js)
