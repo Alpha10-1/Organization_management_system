@@ -27,3 +27,4 @@ from app.models.independence import IndependenceDisclosure, ConflictOverride
 from app.models.workpaper import Workpaper, WorkpaperReviewEvent
 from app.models.client_portal_user import ClientPortalUser
 from app.models.pbc_request import PBCRequest
+from app.models.signature_envelope import SignatureEnvelope

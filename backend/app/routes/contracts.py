@@ -1,4 +1,5 @@
 from decimal import Decimal
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func
@@ -7,12 +8,15 @@ from sqlalchemy.orm import Session
 from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user
 from app.core.department_scope import department_id_for_client, department_id_for_project, require_scoped_write
+from app.core.esign import get_esign_backend
 from app.core.time import utcnow
 from app.db.session import get_db
 from app.models.contract import Contract
 from app.models.project import Project
+from app.models.signature_envelope import SignatureEnvelope
 from app.models.time_entry import TimeEntry
 from app.schemas.contract import ContractCreate, ContractMargin, ContractOut, ContractUpdate
+from app.schemas.signature_envelope import SendForSignatureRequest, SignatureEnvelopeOut
 from app.schemas.user import UserPublic
 
 router = APIRouter(prefix="/contracts", tags=["Contracts"])
@@ -150,6 +154,94 @@ def update_contract(
     )
 
     return contract
+
+
+@router.post("/{contract_id}/send-for-signature", response_model=SignatureEnvelopeOut)
+def send_contract_for_signature(
+    contract_id: int,
+    payload: SendForSignatureRequest,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    """Send the contract out for e-signature. On success, moves the
+    contract to status="sent" (same status a firm would set manually
+    today after emailing a PDF) -- the difference is the send is now
+    tracked as a SignatureEnvelope with a provider envelope id, so
+    /esign/webhook can resolve a provider callback back to this contract
+    and flip it to "signed" automatically instead of someone remembering
+    to update it by hand."""
+    contract = db.query(Contract).filter(Contract.id == contract_id, Contract.deleted_at.is_(None)).first()
+    if not contract:
+        raise HTTPException(status_code=404, detail="Contract not found")
+
+    require_scoped_write(db, current_user, department_id_for_project(db, contract.project_id))
+
+    if contract.status not in ("draft", "sent"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot send a contract with status '{contract.status}' for signature",
+        )
+
+    backend = get_esign_backend()
+    provider_envelope_id = backend.create_envelope(
+        subject=f"Please sign: {contract.name}",
+        signer_email=payload.signer_email,
+        signer_name=payload.signer_name,
+        document_ref=f"Contract #{contract.id}: {contract.name} (value: {contract.value})",
+    )
+
+    envelope = SignatureEnvelope(
+        document_type="contract",
+        document_id=contract.id,
+        project_id=contract.project_id,
+        provider=os.getenv("ESIGN_BACKEND", "mock").strip().lower() or "mock",
+        provider_envelope_id=provider_envelope_id,
+        signer_email=payload.signer_email,
+        signer_name=payload.signer_name,
+        status="sent",
+        sent_at=utcnow(),
+        requested_by_email=current_user.email,
+        requested_by_name=current_user.name,
+    )
+    db.add(envelope)
+
+    contract.status = "sent"
+    db.commit()
+    db.refresh(envelope)
+
+    log_activity(
+        db=db,
+        user=current_user,
+        action="contract_sent_for_signature",
+        entity_type="contract",
+        entity_id=contract.id,
+        title=f"Contract sent for signature: {contract.name}",
+        description=f"Sent to {payload.signer_name} ({payload.signer_email}) for e-signature.",
+    )
+
+    return envelope
+
+
+@router.get("/{contract_id}/signature-envelopes", response_model=list[SignatureEnvelopeOut])
+def list_contract_signature_envelopes(
+    contract_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    contract = db.query(Contract).filter(Contract.id == contract_id, Contract.deleted_at.is_(None)).first()
+    if not contract:
+        raise HTTPException(status_code=404, detail="Contract not found")
+
+    return (
+        db.query(SignatureEnvelope)
+        .filter(
+            SignatureEnvelope.document_type == "contract",
+            SignatureEnvelope.document_id == contract_id,
+            SignatureEnvelope.deleted_at.is_(None),
+        )
+        .order_by(SignatureEnvelope.created_at.desc())
+        .all()
+    )
 
 
 @router.delete("/{contract_id}")

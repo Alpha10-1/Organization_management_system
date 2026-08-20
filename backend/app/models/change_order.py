@@ -36,6 +36,16 @@ class ChangeOrder(Base):
     decided_by_email = Column(String(255), nullable=True)
     decided_by_name = Column(String(255), nullable=True)
 
+    # Set once a signature envelope for this change order (see
+    # SignatureEnvelope) reaches a terminal state. Deliberately separate
+    # from `status` (the internal approve/reject decision) -- a change
+    # order can be internally approved (delta already applied to the
+    # contract) while the client-facing signature is still outstanding,
+    # same as a Contract can be "signed" internally before DocuSign's
+    # copy comes back. sent | completed | declined | voided
+    signature_status = Column(String(20), nullable=True, index=True)
+    signed_at = Column(Date, nullable=True)
+
     created_by_email = Column(String(255), nullable=False)
     created_by_name = Column(String(255), nullable=False)
 

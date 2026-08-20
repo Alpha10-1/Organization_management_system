@@ -64,6 +64,12 @@ class Settings:
     # Cookies can only be marked Secure when served over HTTPS. Local dev
     # runs over plain http, so this defaults off unless explicitly in prod.
     COOKIE_SECURE = os.getenv("COOKIE_SECURE", "").lower() in ("1", "true", "yes") or ENVIRONMENT == "production"
+    # Shared secret e-sign provider webhooks must present (header
+    # X-Esign-Webhook-Secret) to mark an envelope complete/declined/voided
+    # -- without this, anyone who can reach the endpoint could forge a
+    # "contract signed" callback. Same dev-fallback tradeoff as
+    # SECRET_KEY: usable out of the box, but a real value belongs in prod.
+    ESIGN_WEBHOOK_SECRET = os.getenv("ESIGN_WEBHOOK_SECRET", "dev-esign-webhook-secret-change-me")
 
 
 settings = Settings()

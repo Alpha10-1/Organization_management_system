@@ -11,6 +11,7 @@ from app.routes.clients import router as clients_router
 from app.routes.comments import router as comments_router
 from app.routes.contracts import router as contracts_router
 from app.routes.departments import router as departments_router
+from app.routes.esign import router as esign_router
 from app.routes.files import router as files_router
 from app.routes.independence import router as independence_router
 from app.routes.invoices import router as invoices_router
@@ -83,6 +84,7 @@ app.include_router(pbc_requests_router)
 app.include_router(portal_users_router)
 app.include_router(portal_auth_router)
 app.include_router(portal_router)
+app.include_router(esign_router)
 
 @app.get("/")
 async def root():

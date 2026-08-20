@@ -46,6 +46,8 @@ class ChangeOrderOut(BaseModel):
     decided_at: Optional[datetime] = None
     decided_by_email: Optional[str] = None
     decided_by_name: Optional[str] = None
+    signature_status: Optional[str] = None
+    signed_at: Optional[date] = None
     created_by_email: str
     created_by_name: str
     created_at: datetime

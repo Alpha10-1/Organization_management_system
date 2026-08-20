@@ -1,4 +1,5 @@
 from decimal import Decimal
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
@@ -6,16 +7,19 @@ from sqlalchemy.orm import Session
 from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user
 from app.core.department_scope import department_id_for_contract, require_scoped_write
+from app.core.esign import get_esign_backend
 from app.core.time import utcnow
 from app.db.session import get_db
 from app.models.change_order import ChangeOrder
 from app.models.contract import Contract
+from app.models.signature_envelope import SignatureEnvelope
 from app.schemas.change_order import (
     ChangeOrderCreate,
     ChangeOrderDecision,
     ChangeOrderOut,
     ChangeOrderUpdate,
 )
+from app.schemas.signature_envelope import SendForSignatureRequest, SignatureEnvelopeOut
 from app.schemas.user import UserPublic
 
 router = APIRouter(prefix="/change-orders", tags=["Change Orders"])
@@ -234,6 +238,103 @@ def reject_change_order(
     )
 
     return change_order
+
+
+@router.post("/{change_order_id}/send-for-signature", response_model=SignatureEnvelopeOut)
+def send_change_order_for_signature(
+    change_order_id: int,
+    payload: SendForSignatureRequest,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    """The change-order counterpart to POST /contracts/{id}/send-for-signature
+    -- same envelope mechanics, gated on the change order already having
+    been internally approved (its amount_delta is already applied to the
+    contract at that point; this step is about getting the client's
+    countersignature on record, not about the internal decision)."""
+    change_order = (
+        db.query(ChangeOrder).filter(ChangeOrder.id == change_order_id, ChangeOrder.deleted_at.is_(None)).first()
+    )
+    if not change_order:
+        raise HTTPException(status_code=404, detail="Change order not found")
+
+    if change_order.status != "approved":
+        raise HTTPException(status_code=400, detail="Only an approved change order can be sent for signature")
+
+    if change_order.signature_status == "sent":
+        raise HTTPException(status_code=400, detail="This change order already has a signature request outstanding")
+
+    contract = db.query(Contract).filter(Contract.id == change_order.contract_id).first()
+    if not contract:
+        raise HTTPException(status_code=404, detail="Contract not found")
+
+    require_scoped_write(db, current_user, department_id_for_contract(db, change_order.contract_id))
+
+    backend = get_esign_backend()
+    provider_envelope_id = backend.create_envelope(
+        subject=f"Please sign: Change Order - {change_order.title}",
+        signer_email=payload.signer_email,
+        signer_name=payload.signer_name,
+        document_ref=(
+            f"Change Order #{change_order.id} against Contract '{contract.name}': {change_order.title} "
+            f"(delta: {change_order.amount_delta})"
+        ),
+    )
+
+    envelope = SignatureEnvelope(
+        document_type="change_order",
+        document_id=change_order.id,
+        project_id=change_order.project_id,
+        provider=os.getenv("ESIGN_BACKEND", "mock").strip().lower() or "mock",
+        provider_envelope_id=provider_envelope_id,
+        signer_email=payload.signer_email,
+        signer_name=payload.signer_name,
+        status="sent",
+        sent_at=utcnow(),
+        requested_by_email=current_user.email,
+        requested_by_name=current_user.name,
+    )
+    db.add(envelope)
+
+    change_order.signature_status = "sent"
+    db.commit()
+    db.refresh(envelope)
+
+    log_activity(
+        db=db,
+        user=current_user,
+        action="change_order_sent_for_signature",
+        entity_type="change_order",
+        entity_id=change_order.id,
+        title=f"Change order sent for signature: {change_order.title}",
+        description=f"Sent to {payload.signer_name} ({payload.signer_email}) for e-signature.",
+    )
+
+    return envelope
+
+
+@router.get("/{change_order_id}/signature-envelopes", response_model=list[SignatureEnvelopeOut])
+def list_change_order_signature_envelopes(
+    change_order_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    change_order = (
+        db.query(ChangeOrder).filter(ChangeOrder.id == change_order_id, ChangeOrder.deleted_at.is_(None)).first()
+    )
+    if not change_order:
+        raise HTTPException(status_code=404, detail="Change order not found")
+
+    return (
+        db.query(SignatureEnvelope)
+        .filter(
+            SignatureEnvelope.document_type == "change_order",
+            SignatureEnvelope.document_id == change_order_id,
+            SignatureEnvelope.deleted_at.is_(None),
+        )
+        .order_by(SignatureEnvelope.created_at.desc())
+        .all()
+    )
 
 
 @router.delete("/{change_order_id}")
