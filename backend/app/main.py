@@ -28,6 +28,7 @@ from app.routes.task_templates import router as task_templates_router
 from app.routes.tasks import router as tasks_router
 from app.routes.time_entries import router as time_entries_router
 from app.routes.users import router as users_router
+from app.routes.workpapers import router as workpapers_router
 
 app = FastAPI(title="Organization Management System API")
 
@@ -73,6 +74,7 @@ app.include_router(skills_router)
 app.include_router(resource_requests_router)
 app.include_router(leave_requests_router)
 app.include_router(independence_router)
+app.include_router(workpapers_router)
 
 @app.get("/")
 async def root():
