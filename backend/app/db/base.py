@@ -25,3 +25,5 @@ from app.models.resource_request import ResourceRequest
 from app.models.leave_request import LeaveRequest
 from app.models.independence import IndependenceDisclosure, ConflictOverride
 from app.models.workpaper import Workpaper, WorkpaperReviewEvent
+from app.models.client_portal_user import ClientPortalUser
+from app.models.pbc_request import PBCRequest

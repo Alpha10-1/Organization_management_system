@@ -75,3 +75,25 @@ def send_password_reset_email(db: Session, to_email: str, name: str, token: str)
         "This link expires in 1 hour. If you didn't request this, you can ignore this email."
     )
     return send_email(db, to_email, "Reset your password", body, kind="password_reset")
+
+
+def send_portal_invite_email(db: Session, to_email: str, name: str, client_name: str, token: str) -> SentEmail:
+    link = f"{FRONTEND_URL}/portal/set-password?token={token}"
+    body = (
+        f"Hi {name},\n\n"
+        f"You've been invited to the client portal for {client_name}. "
+        "Use the link below to set your password and log in:\n"
+        f"{link}\n\nThis link expires in 24 hours."
+    )
+    return send_email(db, to_email, "You've been invited to the client portal", body, kind="portal_invite")
+
+
+def send_portal_password_reset_email(db: Session, to_email: str, name: str, token: str) -> SentEmail:
+    link = f"{FRONTEND_URL}/portal/reset-password?token={token}"
+    body = (
+        f"Hi {name},\n\n"
+        "We received a request to reset your client portal password. Visit the link "
+        f"below to choose a new one:\n{link}\n\n"
+        "This link expires in 1 hour. If you didn't request this, you can ignore this email."
+    )
+    return send_email(db, to_email, "Reset your client portal password", body, kind="portal_password_reset")

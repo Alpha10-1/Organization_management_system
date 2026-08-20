@@ -17,6 +17,10 @@ from app.routes.invoices import router as invoices_router
 from app.routes.leave_requests import router as leave_requests_router
 from app.routes.milestones import router as milestones_router
 from app.routes.notifications import router as notifications_router
+from app.routes.pbc_requests import router as pbc_requests_router
+from app.routes.portal import router as portal_router
+from app.routes.portal_auth import router as portal_auth_router
+from app.routes.portal_users import router as portal_users_router
 from app.routes.projects import router as projects_router
 from app.routes.protected import router as protected_router
 from app.routes.reports import router as reports_router
@@ -75,6 +79,10 @@ app.include_router(resource_requests_router)
 app.include_router(leave_requests_router)
 app.include_router(independence_router)
 app.include_router(workpapers_router)
+app.include_router(pbc_requests_router)
+app.include_router(portal_users_router)
+app.include_router(portal_auth_router)
+app.include_router(portal_router)
 
 @app.get("/")
 async def root():

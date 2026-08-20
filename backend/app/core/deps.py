@@ -44,7 +44,11 @@ async def get_current_user(
     try:
         payload = decode_access_token(token)
         email = payload.get("sub")
-        if email is None:
+        # A client-portal token (see app.core.portal_deps) carries
+        # actor="client" and must never authenticate staff routes, even if
+        # it decodes cleanly and happens to share an email with a staff
+        # account.
+        if email is None or payload.get("actor") == "client":
             raise credentials_exception
     except InvalidTokenError:
         raise credentials_exception
