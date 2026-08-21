@@ -6,13 +6,15 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from fpdf import FPDF
-from sqlalchemy import case, func
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.billing import compute_realization, money
 from app.core.client_health import compute_client_health
 from app.core.deps import get_current_active_user
+from app.core.risk_prediction import get_risk_forecast
 from app.core.time import utcnow
+from app.core.time_anomaly import detect_time_entry_anomalies
 from app.db.session import get_db
 from app.models.activity_log import ActivityLog
 from app.models.client import Client
@@ -26,6 +28,8 @@ from app.models.task import Task
 from app.models.time_entry import TimeEntry
 from app.models.user import User
 from app.schemas.invoice import RealizationReportOut
+from app.schemas.risk_prediction import AtRiskEngagement
+from app.schemas.time_anomaly import TimeEntryAnomalyOut
 from app.schemas.user import UserPublic
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
@@ -595,3 +599,77 @@ def realization_report(
             for r in result_rows
         ],
     }
+
+
+@router.get("/at-risk-engagements", response_model=list[AtRiskEngagement])
+def at_risk_engagements(
+    lookback_days: int = Query(default=14, ge=1, le=180),
+    min_score: int = Query(default=0, ge=0, le=100),
+    current_user: UserPublic = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Firm-wide leading-indicator list: active engagements whose risk
+    forecast is worsening (or already trending toward a worse predicted
+    health than their current badge shows), so a partner can intervene
+    before the health score itself turns amber/red. Only admins see the
+    full firm view -- everyone else is scoped to engagements they're the
+    partner or manager on, matching how the rest of the reports/dashboards
+    in this file are scoped."""
+
+    query = db.query(Project).filter(
+        Project.deleted_at.is_(None), Project.status.in_(["planning", "active", "on_hold"])
+    )
+    if current_user.role != "admin":
+        query = query.filter(
+            or_(
+                Project.engagement_partner_email == current_user.email,
+                Project.engagement_manager_email == current_user.email,
+            )
+        )
+    projects = query.all()
+
+    client_ids = {p.client_id for p in projects}
+    clients = {c.id: c for c in db.query(Client).filter(Client.id.in_(client_ids)).all()} if client_ids else {}
+
+    flagged = []
+    for project in projects:
+        forecast = get_risk_forecast(db, project, lookback_days=lookback_days)
+        if forecast["risk_score"] < min_score:
+            continue
+        if forecast["trend"] not in ("worsening",) and not forecast["leading_indicator"]:
+            continue
+
+        client = clients.get(project.client_id)
+        flagged.append(
+            AtRiskEngagement(
+                project_id=project.id,
+                project_name=project.name,
+                client_id=project.client_id,
+                client_name=client.display_name if client else None,
+                engagement_partner_name=project.engagement_partner_name,
+                risk_score=forecast["risk_score"],
+                current_health=forecast["current_health"],
+                predicted_health=forecast["predicted_health"],
+                trend=forecast["trend"],
+                score_delta=forecast["score_delta"],
+                signals=forecast["signals"],
+            )
+        )
+
+    flagged.sort(key=lambda e: e.risk_score, reverse=True)
+    return flagged
+
+
+@router.get("/time-entry-anomalies", response_model=list[TimeEntryAnomalyOut])
+def time_entry_anomalies_report(
+    since: date_type | None = Query(default=None),
+    current_user: UserPublic = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Firm-wide view of the same anomaly rules exposed per-project on
+    /time-entries/anomalies -- admin-only, since it spans every user's
+    logged time rather than the caller's own."""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can view firm-wide time entry anomalies")
+
+    return detect_time_entry_anomalies(db, since=since)

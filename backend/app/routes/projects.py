@@ -8,6 +8,7 @@ from app.core.deps import get_current_active_user, get_user_by_email
 from app.core.department_scope import department_id_for_client, department_id_for_project, require_scoped_write
 from app.core.engagement_health import compute_engagement_health
 from app.core.independence import check_conflicts
+from app.core.risk_prediction import TREND_LOOKBACK_DAYS_DEFAULT, get_risk_forecast
 from app.core.time import utcnow
 from app.db.session import get_db
 from app.models.activity_log import ActivityLog
@@ -34,6 +35,7 @@ from app.schemas.project_assignment import (
     ProjectAssignmentOut,
     ProjectAssignmentUpdate,
 )
+from app.schemas.risk_prediction import RiskForecastOut
 from app.schemas.user import UserPublic
 
 router = APIRouter(prefix="/projects", tags=["Projects"])
@@ -177,6 +179,7 @@ def create_project(
         deliverables=payload.deliverables,
         stakeholders=payload.stakeholders,
         billing_notes=payload.billing_notes,
+        close_out_notes=payload.close_out_notes,
         created_by_email=current_user.email,
         created_by_name=current_user.name,
         **extra,
@@ -424,6 +427,24 @@ def get_project_health(
         raise HTTPException(status_code=404, detail="Project not found")
 
     return compute_engagement_health(db, project)
+
+
+@router.get("/{project_id}/risk-forecast", response_model=RiskForecastOut)
+def get_project_risk_forecast(
+    project_id: int,
+    lookback_days: int = Query(default=TREND_LOOKBACK_DAYS_DEFAULT, ge=1, le=180),
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    """Leading-indicator view on top of /health: a 0-100 risk score with a
+    trend read from prior daily snapshots, so a partner can see an
+    engagement sliding toward trouble before the health badge turns red.
+    Recording today's snapshot is a side effect of calling this endpoint."""
+    project = db.query(Project).filter(Project.id == project_id, Project.deleted_at.is_(None)).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    return get_risk_forecast(db, project, lookback_days=lookback_days)
 
 
 @router.post("/{project_id}/clone", response_model=ProjectCloneResult)

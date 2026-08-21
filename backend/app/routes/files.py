@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import tempfile
 import uuid
@@ -23,13 +24,16 @@ from sqlalchemy.orm import Session
 
 from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user
+from app.core.document_intelligence import extract_from_text, extension_supported
 from app.core.file_access import can_delete_file, can_view_file
 from app.core.storage import get_storage_backend
 from app.core.time import utcnow
 from app.db.session import get_db
 from app.models.client import Client
+from app.models.document_extraction import DocumentExtraction
 from app.models.file_record import FileRecord
 from app.models.project import Project
+from app.schemas.document_extraction import DocumentExtractionOut
 from app.schemas.file_record import FileRecordOut
 from app.schemas.user import UserPublic
 
@@ -38,6 +42,22 @@ router = APIRouter(prefix="/files", tags=["Files"])
 
 class BulkFileIds(BaseModel):
     file_ids: list[int]
+
+
+def _extraction_out(extraction: DocumentExtraction) -> DocumentExtractionOut:
+    return DocumentExtractionOut(
+        id=extraction.id,
+        file_record_id=extraction.file_record_id,
+        status=extraction.status,
+        amounts=json.loads(extraction.amounts) if extraction.amounts else [],
+        dates=json.loads(extraction.dates) if extraction.dates else [],
+        labeled_figures=json.loads(extraction.labeled_figures) if extraction.labeled_figures else {},
+        excerpt=extraction.excerpt,
+        extracted_by_email=extraction.extracted_by_email,
+        extracted_by_name=extraction.extracted_by_name,
+        extracted_at=extraction.extracted_at,
+        updated_at=extraction.updated_at,
+    )
 
 
 # Storage is pluggable -- local disk by default, S3-compatible when
@@ -327,6 +347,97 @@ def download_file(
         media_type=record.file_type or "application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{record.original_name}"'},
     )
+
+
+@router.post("/{file_id}/extract", response_model=DocumentExtractionOut)
+def extract_file_document(
+    file_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    """Document intelligence: pulls key dollar figures and dates out of a
+    text-decodable upload (.txt/.csv/.md) so a trial balance or financial
+    statement the client sent doesn't have to be hand-transcribed into the
+    engagement. Re-running replaces the previous extraction for this file
+    rather than accumulating history, since the result is a derived view
+    of the file's current contents, not an independent fact worth keeping
+    every version of."""
+    record = db.query(FileRecord).filter(FileRecord.id == file_id, FileRecord.deleted_at.is_(None)).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="File not found")
+    if not can_view_file(current_user, record):
+        raise HTTPException(status_code=403, detail="You do not have access to this file")
+
+    existing = db.query(DocumentExtraction).filter(DocumentExtraction.file_record_id == record.id).first()
+
+    if not extension_supported(record.original_name):
+        payload = {"status": "unsupported_type", "amounts": [], "dates": [], "labeled_figures": {}, "excerpt": None}
+    elif not storage.exists(record.stored_name):
+        raise HTTPException(status_code=404, detail="Stored file missing")
+    else:
+        raw = storage.read_bytes(record.stored_name)
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            text = raw.decode("utf-8", errors="ignore")
+        payload = extract_from_text(text)
+
+    if existing:
+        existing.status = payload["status"]
+        existing.amounts = json.dumps(payload["amounts"])
+        existing.dates = json.dumps(payload["dates"])
+        existing.labeled_figures = json.dumps(payload["labeled_figures"])
+        existing.excerpt = payload["excerpt"]
+        existing.extracted_by_email = current_user.email
+        existing.extracted_by_name = current_user.name
+        existing.extracted_at = utcnow()
+        record_out = existing
+    else:
+        record_out = DocumentExtraction(
+            file_record_id=record.id,
+            status=payload["status"],
+            amounts=json.dumps(payload["amounts"]),
+            dates=json.dumps(payload["dates"]),
+            labeled_figures=json.dumps(payload["labeled_figures"]),
+            excerpt=payload["excerpt"],
+            extracted_by_email=current_user.email,
+            extracted_by_name=current_user.name,
+        )
+        db.add(record_out)
+
+    db.commit()
+    db.refresh(record_out)
+
+    log_activity(
+        db=db,
+        user=current_user,
+        action="file_extracted",
+        entity_type="file",
+        entity_id=record.id,
+        title=f"Document intelligence run on: {record.original_name}",
+        description=f"Extraction status: {record_out.status}",
+    )
+
+    return _extraction_out(record_out)
+
+
+@router.get("/{file_id}/extraction", response_model=DocumentExtractionOut)
+def get_file_extraction(
+    file_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    record = db.query(FileRecord).filter(FileRecord.id == file_id, FileRecord.deleted_at.is_(None)).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="File not found")
+    if not can_view_file(current_user, record):
+        raise HTTPException(status_code=403, detail="You do not have access to this file")
+
+    extraction = db.query(DocumentExtraction).filter(DocumentExtraction.file_record_id == record.id).first()
+    if not extraction:
+        raise HTTPException(status_code=404, detail="No extraction has been run for this file yet")
+
+    return _extraction_out(extraction)
 
 
 @router.delete("/{file_id}")

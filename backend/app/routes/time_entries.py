@@ -8,10 +8,12 @@ from sqlalchemy.orm import Session
 from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user, get_user_by_email
 from app.core.time import utcnow
+from app.core.time_anomaly import detect_time_entry_anomalies
 from app.db.session import get_db
 from app.models.project import Project
 from app.models.task import Task
 from app.models.time_entry import TimeEntry
+from app.schemas.time_anomaly import TimeEntryAnomalyOut
 from app.schemas.time_entry import (
     ProjectUtilization,
     TimeEntryCreate,
@@ -175,6 +177,28 @@ def project_utilization(
         budget=project.budget,
         entry_count=entry_count,
     )
+
+
+@router.get("/anomalies", response_model=list[TimeEntryAnomalyOut])
+def list_time_entry_anomalies(
+    project_id: int | None = Query(default=None),
+    user_email: str | None = Query(default=None),
+    since: date_type | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    """Rules-based flags over logged time entries (late-logged, large
+    Friday blocks, possible duplicates, round-number repeat patterns) --
+    for partner review and audit-quality controls, not an accusation
+    engine. Non-admins are limited to their own entries; admins can filter
+    by any project/user."""
+    if current_user.role != "admin" and (user_email is None or user_email.lower() != current_user.email.lower()):
+        user_email = current_user.email
+
+    if project_id is not None:
+        _get_project_or_404(db, project_id)
+
+    return detect_time_entry_anomalies(db, project_id=project_id, user_email=user_email, since=since)
 
 
 @router.get("/{entry_id}", response_model=TimeEntryOut)

@@ -28,3 +28,5 @@ from app.models.workpaper import Workpaper, WorkpaperReviewEvent
 from app.models.client_portal_user import ClientPortalUser
 from app.models.pbc_request import PBCRequest
 from app.models.signature_envelope import SignatureEnvelope
+from app.models.risk_snapshot import EngagementRiskSnapshot
+from app.models.document_extraction import DocumentExtraction

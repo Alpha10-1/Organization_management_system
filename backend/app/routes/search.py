@@ -3,6 +3,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user
+from app.core.engagement_search import search_engagements
 from app.db.session import get_db
 from app.models.client import Client
 from app.models.file_record import FileRecord
@@ -104,3 +105,18 @@ def global_search(
         ]
 
     return results
+
+
+@router.get("/engagements")
+def search_engagements_nl(
+    q: str = Query(..., min_length=1),
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(get_current_active_user),
+):
+    """Plain-language search over an engagement's narrative history --
+    project notes/objectives/close-out notes, its client's notes, and its
+    own activity log -- rather than the exact-name matching global_search
+    above does. E.g. "show me every engagement where we flagged a going
+    concern issue" matches on the phrase "going concern" wherever it
+    appears in that history."""
+    return search_engagements(db, q)
