@@ -79,6 +79,26 @@ def test_search_no_matches_returns_empty_results(admin_client):
     assert resp.json()["results"] == []
 
 
+def test_search_omits_client_name_for_soft_deleted_client(admin_client):
+    client = _create_client(admin_client, email="search-deleted-client@example.com")
+    project = _create_project(
+        admin_client,
+        client["id"],
+        close_out_notes="Flagged a material weakness in controls this cycle.",
+    )
+
+    resp = admin_client.delete(f"/clients/{client['id']}")
+    assert resp.status_code == 200, resp.text
+
+    resp = admin_client.get("/search/engagements?q=material weakness")
+    assert resp.status_code == 200, resp.text
+    results = resp.json()["results"]
+    matched = next(r for r in results if r["project_id"] == project["id"])
+    # The project's own text still matches, but a soft-deleted client
+    # should not surface a stale display name in the result.
+    assert matched["client_name"] is None
+
+
 def test_search_ignores_stopword_only_query(admin_client):
     client = _create_client(admin_client, email="search-stopwords@example.com")
     _create_project(admin_client, client["id"], close_out_notes="Something noteworthy happened.")

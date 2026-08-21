@@ -146,18 +146,15 @@ def test_non_admin_limited_to_own_entries(staff_client, admin_client):
     assert resp.json() == []
 
 
-def test_firm_wide_report_requires_admin(staff_client):
-    resp = staff_client.get("/reports/time-entry-anomalies")
-    assert resp.status_code == 403
-
-
-def test_firm_wide_report_returns_flags_for_admin(admin_client):
+def test_firm_wide_report_visible_to_any_authenticated_user(staff_client, admin_client):
+    """Unrestricted for any authenticated user, matching every other
+    firm-wide report in this file -- not gated to admins."""
     client = _create_client(admin_client, email="anomaly-report@example.com")
     project = _create_project(admin_client, client["id"])
     stale_date = date_type.today() - timedelta(days=30)
     entry = _create_time_entry(admin_client, project["id"], hours="3.0", entry_date=str(stale_date))
 
-    resp = admin_client.get("/reports/time-entry-anomalies")
+    resp = staff_client.get("/reports/time-entry-anomalies")
     assert resp.status_code == 200, resp.text
     ids = [f["time_entry_id"] for f in resp.json()]
     assert entry["id"] in ids

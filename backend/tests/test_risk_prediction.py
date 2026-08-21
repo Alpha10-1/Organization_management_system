@@ -102,20 +102,30 @@ def test_at_risk_engagements_report_flags_worsening_engagement(admin_client):
     assert project["id"] in ids
 
 
-def test_at_risk_engagements_report_scoped_for_non_admin(staff_client, admin_client):
+def test_at_risk_engagements_report_visible_to_any_authenticated_user(staff_client, admin_client):
+    """Unrestricted for any authenticated user, matching every other
+    firm-wide report in this file (compliance_dashboard, capacity_dashboard,
+    realization_report) -- not scoped to admins or to a partner/manager
+    relationship on the engagement."""
+    from app.db.session import SessionLocal
+    from app.models.project import Project as ProjectModel
+    from app.core.risk_prediction import record_snapshot
+    from datetime import date as date_type, timedelta as td
+
     client = _create_client(admin_client, email="risk-scope@example.com")
-    project = _create_project(
-        admin_client,
-        client["id"],
-        risk_level="high",
-        status="active",
-    )
-    # Created with no engagement_partner_email/engagement_manager_email set,
-    # so it isn't staff's engagement -- non-admins should not see it.
+    project = _create_project(admin_client, client["id"], risk_level="low", status="active")
+
+    with SessionLocal() as db:
+        project_row = db.query(ProjectModel).filter(ProjectModel.id == project["id"]).first()
+        record_snapshot(db, project_row, on=date_type.today() - td(days=10))
+
+    resp = admin_client.put(f"/projects/{project['id']}", json={"risk_level": "high"})
+    assert resp.status_code == 200, resp.text
+
     resp = staff_client.get("/reports/at-risk-engagements?lookback_days=7&min_score=0")
     assert resp.status_code == 200, resp.text
     ids = [row["project_id"] for row in resp.json()]
-    assert project["id"] not in ids
+    assert project["id"] in ids
 
 
 def test_leading_indicator_flags_before_health_badge_turns_red(admin_client):

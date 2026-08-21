@@ -6,7 +6,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from fpdf import FPDF
-from sqlalchemy import case, func, or_
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.core.billing import compute_realization, money
@@ -611,25 +611,24 @@ def at_risk_engagements(
     """Firm-wide leading-indicator list: active engagements whose risk
     forecast is worsening (or already trending toward a worse predicted
     health than their current badge shows), so a partner can intervene
-    before the health score itself turns amber/red. Only admins see the
-    full firm view -- everyone else is scoped to engagements they're the
-    partner or manager on, matching how the rest of the reports/dashboards
-    in this file are scoped."""
+    before the health score itself turns amber/red. Unrestricted for any
+    authenticated user, matching compliance_dashboard/capacity_dashboard/
+    realization_report elsewhere in this file -- none of the other
+    firm-wide reports here are role- or ownership-scoped, so this one
+    isn't either."""
 
-    query = db.query(Project).filter(
-        Project.deleted_at.is_(None), Project.status.in_(["planning", "active", "on_hold"])
+    projects = (
+        db.query(Project)
+        .filter(Project.deleted_at.is_(None), Project.status.in_(["planning", "active", "on_hold"]))
+        .all()
     )
-    if current_user.role != "admin":
-        query = query.filter(
-            or_(
-                Project.engagement_partner_email == current_user.email,
-                Project.engagement_manager_email == current_user.email,
-            )
-        )
-    projects = query.all()
 
     client_ids = {p.client_id for p in projects}
-    clients = {c.id: c for c in db.query(Client).filter(Client.id.in_(client_ids)).all()} if client_ids else {}
+    clients = (
+        {c.id: c for c in db.query(Client).filter(Client.id.in_(client_ids), Client.deleted_at.is_(None)).all()}
+        if client_ids
+        else {}
+    )
 
     flagged = []
     for project in projects:
@@ -667,9 +666,7 @@ def time_entry_anomalies_report(
     db: Session = Depends(get_db),
 ):
     """Firm-wide view of the same anomaly rules exposed per-project on
-    /time-entries/anomalies -- admin-only, since it spans every user's
-    logged time rather than the caller's own."""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Only admins can view firm-wide time entry anomalies")
-
+    /time-entries/anomalies. Unrestricted for any authenticated user, same
+    reasoning as at_risk_engagements above -- consistent with every other
+    firm-wide report in this file rather than a one-off admin gate."""
     return detect_time_entry_anomalies(db, since=since)

@@ -170,7 +170,9 @@ def search_engagements(db: Session, q: str, db_limit: int = 200) -> dict:
         for p in db.query(Project).filter(Project.id.in_(project_ids), Project.deleted_at.is_(None)).all()
     }
     client_ids = {p.client_id for p in projects.values()}
-    clients = {c.id: c for c in db.query(Client).filter(Client.id.in_(client_ids)).all()}
+    clients = {
+        c.id: c for c in db.query(Client).filter(Client.id.in_(client_ids), Client.deleted_at.is_(None)).all()
+    }
 
     results = []
     for project_id, entry in scoreboard.items():
