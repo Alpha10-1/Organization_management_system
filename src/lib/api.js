@@ -805,3 +805,43 @@ export const fetchPartnerDashboard = (partnerEmail) =>
   apiGet(`/reports/dashboard/partner?partner_email=${encodeURIComponent(partnerEmail)}`);
 export const fetchClientDashboard = (clientId) => apiGet(`/reports/dashboard/client/${clientId}`);
 export const fetchComplianceDashboard = () => apiGet("/reports/dashboard/compliance");
+
+// --- Q3: Engagement risk prediction -----------------------------------------------
+
+export const fetchProjectRiskForecast = (id, lookbackDays) =>
+  apiGet(`/projects/${id}/risk-forecast${lookbackDays != null ? `?lookback_days=${lookbackDays}` : ""}`);
+
+export function fetchAtRiskEngagements(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.lookback_days != null) searchParams.append("lookback_days", params.lookback_days);
+  if (params.min_score != null) searchParams.append("min_score", params.min_score);
+  const qs = searchParams.toString();
+  return apiGet(`/reports/at-risk-engagements${qs ? `?${qs}` : ""}`);
+}
+
+// --- Q3: Time entry anomaly detection ----------------------------------------------
+
+export function fetchTimeEntryAnomalies(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.project_id) searchParams.append("project_id", params.project_id);
+  if (params.user_email) searchParams.append("user_email", params.user_email);
+  if (params.since) searchParams.append("since", params.since);
+  const qs = searchParams.toString();
+  return apiGet(`/time-entries/anomalies${qs ? `?${qs}` : ""}`);
+}
+
+export function fetchTimeEntryAnomaliesReport(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.since) searchParams.append("since", params.since);
+  const qs = searchParams.toString();
+  return apiGet(`/reports/time-entry-anomalies${qs ? `?${qs}` : ""}`);
+}
+
+// --- Q3: Natural-language engagement search -----------------------------------------
+
+export const searchEngagements = (q) => apiGet(`/search/engagements?q=${encodeURIComponent(q)}`);
+
+// --- Q3: Document intelligence ------------------------------------------------------
+
+export const extractFileDocument = (fileId) => apiSend(`/files/${fileId}/extract`, "POST");
+export const fetchFileExtraction = (fileId) => apiGet(`/files/${fileId}/extraction`);

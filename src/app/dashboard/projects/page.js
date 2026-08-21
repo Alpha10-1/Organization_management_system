@@ -32,6 +32,8 @@ import {
   fetchProjectHistory,
   fetchProjectBudgetBurn,
   fetchProjectHealth,
+  fetchProjectRiskForecast,
+  fetchTimeEntryAnomalies,
   cloneProject,
   fetchChangeOrders,
   createChangeOrder,
@@ -75,6 +77,20 @@ const BUDGET_STATUS_STYLES = {
   over_budget: "bg-rose-500",
   hours_only: "bg-slate-400",
   no_budget: "bg-slate-300",
+};
+
+const TREND_STYLES = {
+  worsening: "bg-rose-100 text-rose-700",
+  improving: "bg-emerald-100 text-emerald-700",
+  stable: "bg-slate-100 text-slate-600",
+  insufficient_data: "bg-slate-100 text-slate-400",
+};
+
+const ANOMALY_LABELS = {
+  late_logged: "Logged late",
+  friday_large_block: "Large Friday block",
+  possible_duplicate: "Possible duplicate",
+  round_number_pattern: "Round-number pattern",
 };
 
 const CHANGE_ORDER_TYPES = ["scope_change", "fee_adjustment", "timeline_extension", "other"];
@@ -214,6 +230,10 @@ export default function ProjectsPage() {
 
   const [budgetBurn, setBudgetBurn] = useState(null);
   const [health, setHealth] = useState(null);
+  const [riskForecast, setRiskForecast] = useState(null);
+  const [riskForecastLoading, setRiskForecastLoading] = useState(false);
+  const [riskForecastError, setRiskForecastError] = useState("");
+  const [timeAnomalies, setTimeAnomalies] = useState([]);
   const [projectTasks, setProjectTasks] = useState([]);
 
   const [changeOrders, setChangeOrders] = useState([]);
@@ -261,8 +281,10 @@ export default function ProjectsPage() {
     setSelectedProject(project);
     setActiveTab("overview");
     setHistoryLoading(true);
+    setRiskForecast(null);
+    setRiskForecastError("");
     try {
-      const [ms, cs, te, util, as, hist, burn, hp, cos, tks] = await Promise.all([
+      const [ms, cs, te, util, as, hist, burn, hp, cos, tks, anomalies] = await Promise.all([
         fetchMilestones({ project_id: project.id }),
         fetchContracts({ project_id: project.id }),
         fetchTimeEntries({ project_id: project.id }),
@@ -273,6 +295,7 @@ export default function ProjectsPage() {
         fetchProjectHealth(project.id).catch(() => null),
         fetchChangeOrders({ project_id: project.id }).catch(() => []),
         fetchTasks({ project_id: project.id }).catch(() => []),
+        fetchTimeEntryAnomalies({ project_id: project.id }).catch(() => []),
       ]);
       setMilestones(ms);
       setContracts(cs);
@@ -284,6 +307,7 @@ export default function ProjectsPage() {
       setHealth(hp);
       setChangeOrders(cos);
       setProjectTasks(tks);
+      setTimeAnomalies(anomalies);
 
       const margins = {};
       await Promise.all(
@@ -305,6 +329,20 @@ export default function ProjectsPage() {
 
   async function refreshDetail() {
     if (selectedProject) await loadProjectDetail(selectedProject);
+  }
+
+  async function loadRiskForecast() {
+    if (!selectedProject) return;
+    setRiskForecastLoading(true);
+    setRiskForecastError("");
+    try {
+      const forecast = await fetchProjectRiskForecast(selectedProject.id);
+      setRiskForecast(forecast);
+    } catch (err) {
+      setRiskForecastError(err.message || "Failed to load risk forecast");
+    } finally {
+      setRiskForecastLoading(false);
+    }
   }
 
   function clientLabel(clientId) {
@@ -738,6 +776,7 @@ export default function ProjectsPage() {
       { id: "contracts", label: `Contracts (${contracts.length})` },
       { id: "changeOrders", label: `Change Orders (${changeOrders.length})` },
       { id: "time", label: `Time (${timeEntries.length})` },
+      { id: "risk", label: "Risk Forecast" },
       { id: "template", label: "Apply Template" },
       { id: "history", label: "History" },
     ],
@@ -946,7 +985,12 @@ export default function ProjectsPage() {
                 {tabs.map((tab) => (
                   <button
                     key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
+                    onClick={() => {
+                      setActiveTab(tab.id);
+                      if (tab.id === "risk" && !riskForecast && !riskForecastLoading) {
+                        loadRiskForecast();
+                      }
+                    }}
                     className={`rounded-xl px-3 py-2 text-xs font-semibold transition ${
                       activeTab === tab.id
                         ? "bg-slate-900 text-white"
@@ -1516,32 +1560,148 @@ export default function ProjectsPage() {
                   >
                     + Log Time
                   </button>
+                  {timeAnomalies.length > 0 ? (
+                    <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                      {timeAnomalies.length} entr{timeAnomalies.length === 1 ? "y" : "ies"} flagged for review below
+                      — not an accusation, just worth a second look.
+                    </p>
+                  ) : null}
                   <div className="max-h-72 space-y-2 overflow-y-auto">
                     {timeEntries.length === 0 ? (
                       <p className="text-sm text-slate-400">No time logged yet.</p>
                     ) : (
-                      timeEntries.map((t) => (
-                        <div
-                          key={t.id}
-                          className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 p-3"
-                        >
-                          <div>
-                            <p className="text-sm text-slate-800">
-                              {t.hours}h · {t.user_name} · {formatDate(t.entry_date)}
-                              {!t.billable ? <span className="ml-2 text-xs text-slate-400">(non-billable)</span> : null}
-                            </p>
-                            {t.notes ? <p className="text-xs text-slate-500">{t.notes}</p> : null}
-                          </div>
-                          <button
-                            onClick={() => handleDeleteTimeEntry(t)}
-                            className="text-xs font-semibold text-rose-500 hover:underline"
+                      timeEntries.map((t) => {
+                        const anomaly = timeAnomalies.find((a) => a.time_entry_id === t.id);
+                        return (
+                          <div
+                            key={t.id}
+                            className={`rounded-xl border p-3 ${
+                              anomaly ? "border-amber-300 bg-amber-50" : "border-slate-200 bg-slate-50"
+                            }`}
                           >
-                            Delete
-                          </button>
-                        </div>
-                      ))
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="text-sm text-slate-800">
+                                  {t.hours}h · {t.user_name} · {formatDate(t.entry_date)}
+                                  {!t.billable ? (
+                                    <span className="ml-2 text-xs text-slate-400">(non-billable)</span>
+                                  ) : null}
+                                </p>
+                                {t.notes ? <p className="text-xs text-slate-500">{t.notes}</p> : null}
+                              </div>
+                              <button
+                                onClick={() => handleDeleteTimeEntry(t)}
+                                className="text-xs font-semibold text-rose-500 hover:underline"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                            {anomaly ? (
+                              <div className="mt-2 flex flex-wrap gap-1">
+                                {anomaly.flags.map((flag, idx) => (
+                                  <span
+                                    key={flag}
+                                    title={anomaly.reasons[idx]}
+                                    className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800"
+                                  >
+                                    {ANOMALY_LABELS[flag] || flag}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })
                     )}
                   </div>
+                </div>
+              ) : null}
+
+              {activeTab === "risk" ? (
+                <div className="mt-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm text-slate-500">
+                      A leading-indicator score built from budget-burn velocity, overdue work, and timeline
+                      slippage — can flag trouble before the health badge above turns amber/red.
+                    </p>
+                    <button
+                      onClick={loadRiskForecast}
+                      disabled={riskForecastLoading}
+                      className="shrink-0 rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                    >
+                      {riskForecastLoading ? "Refreshing..." : "Refresh"}
+                    </button>
+                  </div>
+
+                  {riskForecastError ? (
+                    <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+                      {riskForecastError}
+                    </div>
+                  ) : null}
+
+                  {riskForecastLoading && !riskForecast ? (
+                    <p className="text-sm text-slate-500">Loading...</p>
+                  ) : riskForecast ? (
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                          <p className="text-xs text-slate-500">Risk Score</p>
+                          <p className="mt-1 text-2xl font-bold text-slate-900">{riskForecast.risk_score}</p>
+                        </div>
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                          <p className="text-xs text-slate-500">Current Health</p>
+                          <span
+                            className={`mt-1 inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize ${
+                              HEALTH_STYLES[riskForecast.current_health] || HEALTH_STYLES.green
+                            }`}
+                          >
+                            {riskForecast.current_health}
+                          </span>
+                        </div>
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                          <p className="text-xs text-slate-500">Predicted Health</p>
+                          <span
+                            className={`mt-1 inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize ${
+                              HEALTH_STYLES[riskForecast.predicted_health] || HEALTH_STYLES.green
+                            }`}
+                          >
+                            {riskForecast.predicted_health}
+                          </span>
+                        </div>
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                          <p className="text-xs text-slate-500">Trend ({riskForecast.lookback_days}d)</p>
+                          <span
+                            className={`mt-1 inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize ${
+                              TREND_STYLES[riskForecast.trend] || TREND_STYLES.stable
+                            }`}
+                          >
+                            {riskForecast.trend.replace("_", " ")}
+                            {riskForecast.score_delta != null
+                              ? ` (${riskForecast.score_delta > 0 ? "+" : ""}${riskForecast.score_delta})`
+                              : ""}
+                          </span>
+                        </div>
+                      </div>
+
+                      {riskForecast.leading_indicator ? (
+                        <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                          Leading indicator: the forecast is already worse than today&apos;s health badge —
+                          worth a look before it catches up.
+                        </div>
+                      ) : null}
+
+                      <div>
+                        <p className="mb-2 text-sm font-semibold text-slate-700">Contributing Signals</p>
+                        <ul className="space-y-1">
+                          {riskForecast.signals.map((s, idx) => (
+                            <li key={idx} className="text-sm text-slate-600">
+                              • {s}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 

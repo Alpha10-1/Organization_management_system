@@ -15,6 +15,9 @@ import {
   fetchClientDashboard,
   fetchComplianceDashboard,
   fetchCapacityDashboard,
+  fetchAtRiskEngagements,
+  fetchTimeEntryAnomaliesReport,
+  searchEngagements,
 } from "@/lib/api";
 
 function clientDisplayName(client) {
@@ -469,6 +472,300 @@ function CapacityDashboardPanel() {
   );
 }
 
+const RISK_TREND_STYLES = {
+  worsening: "bg-rose-100 text-rose-700",
+  improving: "bg-emerald-100 text-emerald-700",
+  stable: "bg-slate-100 text-slate-600",
+  insufficient_data: "bg-slate-100 text-slate-400",
+};
+
+const HEALTH_BADGE_STYLES = {
+  green: "bg-emerald-100 text-emerald-700",
+  amber: "bg-amber-100 text-amber-700",
+  red: "bg-rose-100 text-rose-700",
+};
+
+const ANOMALY_FLAG_LABELS = {
+  late_logged: "Logged late",
+  friday_large_block: "Large Friday block",
+  possible_duplicate: "Possible duplicate",
+  round_number_pattern: "Round-number pattern",
+};
+
+function AtRiskEngagementsPanel() {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [lookbackDays, setLookbackDays] = useState(14);
+
+  function load(days) {
+    setLoading(true);
+    setError("");
+    fetchAtRiskEngagements({ lookback_days: days })
+      .then(setData)
+      .catch((err) => setError(err.message || "Failed to load at-risk engagements"))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    load(lookbackDays);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-slate-500">
+          Active engagements whose risk forecast is worsening, or already trending toward a worse
+          predicted health than their current badge shows — a leading indicator, not just today&apos;s
+          status.
+        </p>
+        <div className="flex shrink-0 items-center gap-2">
+          <select
+            value={lookbackDays}
+            onChange={(e) => {
+              const days = Number(e.target.value);
+              setLookbackDays(days);
+              load(days);
+            }}
+            className="rounded-xl border border-slate-300 px-3 py-2 text-xs outline-none focus:border-slate-900"
+          >
+            <option value={7}>7-day trend</option>
+            <option value={14}>14-day trend</option>
+            <option value={30}>30-day trend</option>
+          </select>
+          <button
+            onClick={() => load(lookbackDays)}
+            className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+          >
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      {error ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+          {error}
+        </div>
+      ) : null}
+
+      {loading ? (
+        <p className="text-sm text-slate-500">Loading...</p>
+      ) : data.length === 0 ? (
+        <p className="text-sm text-slate-400">
+          No active engagements are currently trending toward higher risk.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {data.map((e) => (
+            <div key={e.project_id} className="rounded-xl border border-slate-200 bg-white p-3 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="font-medium text-slate-800">{e.project_name}</p>
+                  <p className="text-xs text-slate-500">
+                    {e.client_name || `Client #${e.client_id}`}
+                    {e.engagement_partner_name ? ` · ${e.engagement_partner_name}` : ""}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold capitalize ${
+                      HEALTH_BADGE_STYLES[e.current_health] || HEALTH_BADGE_STYLES.green
+                    }`}
+                  >
+                    now: {e.current_health}
+                  </span>
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold capitalize ${
+                      HEALTH_BADGE_STYLES[e.predicted_health] || HEALTH_BADGE_STYLES.green
+                    }`}
+                  >
+                    forecast: {e.predicted_health}
+                  </span>
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold capitalize ${
+                      RISK_TREND_STYLES[e.trend] || RISK_TREND_STYLES.stable
+                    }`}
+                  >
+                    {e.trend.replace("_", " ")}
+                  </span>
+                  <span className="rounded-full bg-slate-900 px-2.5 py-0.5 text-[10px] font-semibold text-white">
+                    score {e.risk_score}
+                  </span>
+                </div>
+              </div>
+              {e.signals?.length ? (
+                <p className="mt-2 text-xs text-slate-500">{e.signals.join(" · ")}</p>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TimeAnomaliesPanel() {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  function load() {
+    setLoading(true);
+    setError("");
+    fetchTimeEntryAnomaliesReport()
+      .then(setData)
+      .catch((err) => setError(err.message || "Failed to load time entry anomalies"))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-slate-500">
+          Rules-based flags across every logged time entry firm-wide — late-logged entries, large
+          Friday blocks, possible duplicates, and round-number repeat patterns. For partner review,
+          not an accusation.
+        </p>
+        <button
+          onClick={load}
+          className="shrink-0 rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+        >
+          Refresh
+        </button>
+      </div>
+
+      {error ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+          {error}
+        </div>
+      ) : null}
+
+      {loading ? (
+        <p className="text-sm text-slate-500">Loading...</p>
+      ) : data.length === 0 ? (
+        <p className="text-sm text-slate-400">No flagged time entries.</p>
+      ) : (
+        <div className="max-h-96 space-y-2 overflow-y-auto">
+          {data.map((a) => (
+            <div key={a.time_entry_id} className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-slate-800">
+                  {a.hours}h · {a.user_name} · {formatDate(a.entry_date)}
+                </p>
+                <div className="flex flex-wrap gap-1">
+                  {a.flags.map((flag, idx) => (
+                    <span
+                      key={flag}
+                      title={a.reasons[idx]}
+                      className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800"
+                    >
+                      {ANOMALY_FLAG_LABELS[flag] || flag}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EngagementSearchPanel() {
+  const [query, setQuery] = useState("");
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleSearch(e) {
+    e.preventDefault();
+    if (!query.trim()) return;
+    setLoading(true);
+    setError("");
+    try {
+      const data = await searchEngagements(query.trim());
+      setResult(data);
+    } catch (err) {
+      setError(err.message || "Search failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-500">
+        Search engagement notes, close-out notes, client notes, and the activity log in plain
+        language — e.g. &quot;every engagement where we flagged a going concern issue&quot;.
+      </p>
+      <form onSubmit={handleSearch} className="flex gap-2">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Show me every engagement where we flagged a going concern issue..."
+          className="w-full rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-slate-900"
+        />
+        <button
+          type="submit"
+          disabled={loading || !query.trim()}
+          className="shrink-0 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+        >
+          {loading ? "Searching..." : "Search"}
+        </button>
+      </form>
+
+      {error ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+          {error}
+        </div>
+      ) : null}
+
+      {result ? (
+        <div className="space-y-3">
+          {(result.terms?.length || result.phrases?.length) ? (
+            <p className="text-xs text-slate-400">
+              Matched on: {[...(result.phrases || []), ...(result.terms || [])].join(", ")}
+            </p>
+          ) : null}
+          {result.results.length === 0 ? (
+            <p className="text-sm text-slate-400">No engagements matched that search.</p>
+          ) : (
+            result.results.map((r) => (
+              <div key={r.project_id} className="rounded-xl border border-slate-200 bg-white p-3 text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-medium text-slate-800">{r.project_name}</p>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-semibold text-slate-600">
+                    {r.match_count} match{r.match_count === 1 ? "" : "es"}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500">
+                  {r.client_name || `Client #${r.client_id}`} · matched: {r.matched_terms.join(", ")}
+                </p>
+                {r.snippets?.length ? (
+                  <ul className="mt-2 space-y-1">
+                    {r.snippets.map((snippet, idx) => (
+                      <li key={idx} className="text-xs text-slate-500">
+                        {snippet}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ))
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function formatDateTime(dateString) {
   const date = new Date(dateString);
   return date.toLocaleString();
@@ -660,6 +957,30 @@ export default function ReportsPage() {
           >
             Capacity
           </button>
+          <button
+            onClick={() => setDashboardTab("at-risk")}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              dashboardTab === "at-risk" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+            }`}
+          >
+            At-Risk (Forecast)
+          </button>
+          <button
+            onClick={() => setDashboardTab("time-anomalies")}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              dashboardTab === "time-anomalies" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+            }`}
+          >
+            Time Anomalies
+          </button>
+          <button
+            onClick={() => setDashboardTab("search")}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              dashboardTab === "search" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+            }`}
+          >
+            Engagement Search
+          </button>
         </div>
 
         <div className="mt-4">
@@ -669,8 +990,14 @@ export default function ReportsPage() {
             <ClientDashboardPanel />
           ) : dashboardTab === "compliance" ? (
             <ComplianceDashboardPanel />
-          ) : (
+          ) : dashboardTab === "capacity" ? (
             <CapacityDashboardPanel />
+          ) : dashboardTab === "at-risk" ? (
+            <AtRiskEngagementsPanel />
+          ) : dashboardTab === "time-anomalies" ? (
+            <TimeAnomaliesPanel />
+          ) : (
+            <EngagementSearchPanel />
           )}
         </div>
       </div>

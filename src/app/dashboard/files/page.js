@@ -12,6 +12,8 @@ import {
   bulkDownloadFiles,
   uploadFileVersion,
   fetchFileVersions,
+  extractFileDocument,
+  fetchFileExtraction,
 } from "@/lib/api";
 
 function clientDisplayName(client) {
@@ -59,6 +61,11 @@ export default function FilesPage() {
   const [versionUploading, setVersionUploading] = useState(false);
   const [versions, setVersions] = useState([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
+
+  const [extraction, setExtraction] = useState(null);
+  const [extractionLoading, setExtractionLoading] = useState(false);
+  const [extracting, setExtracting] = useState(false);
+  const [extractionError, setExtractionError] = useState("");
 
   async function handleDownload(fileId) {
     try {
@@ -121,6 +128,35 @@ export default function FilesPage() {
       .catch(() => setVersions([]))
       .finally(() => setVersionsLoading(false));
   }, [selectedFile]);
+
+  useEffect(() => {
+    if (!selectedFile) {
+      setExtraction(null);
+      setExtractionError("");
+      return;
+    }
+    setExtraction(null);
+    setExtractionError("");
+    setExtractionLoading(true);
+    fetchFileExtraction(selectedFile.id)
+      .then(setExtraction)
+      .catch(() => setExtraction(null))
+      .finally(() => setExtractionLoading(false));
+  }, [selectedFile]);
+
+  async function handleExtract() {
+    if (!selectedFile) return;
+    setExtracting(true);
+    setExtractionError("");
+    try {
+      const result = await extractFileDocument(selectedFile.id);
+      setExtraction(result);
+    } catch (err) {
+      setExtractionError(err.message || "Failed to extract document");
+    } finally {
+      setExtracting(false);
+    }
+  }
 
   function toggleSelected(fileId) {
     setSelectedIds((prev) =>
@@ -618,6 +654,99 @@ export default function FilesPage() {
                     ))
                   )}
                 </div>
+              </div>
+
+              <div className="border-t border-slate-100 pt-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Document Intelligence
+                  </p>
+                  <button
+                    onClick={handleExtract}
+                    disabled={extracting}
+                    className="rounded-xl border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                  >
+                    {extracting ? "Extracting..." : extraction ? "Re-run Extraction" : "Extract Figures"}
+                  </button>
+                </div>
+
+                {extractionError ? (
+                  <p className="mt-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">
+                    {extractionError}
+                  </p>
+                ) : null}
+
+                {extractionLoading ? (
+                  <p className="mt-2 text-sm text-slate-400">Checking for a prior extraction...</p>
+                ) : extraction ? (
+                  extraction.status === "unsupported_type" ? (
+                    <p className="mt-2 text-sm text-slate-400">
+                      This file type isn&apos;t supported for extraction yet — only .txt, .csv, and .md
+                      files can be scanned.
+                    </p>
+                  ) : extraction.status === "empty" ? (
+                    <p className="mt-2 text-sm text-slate-400">
+                      No dollar figures or dates were found in this file.
+                    </p>
+                  ) : (
+                    <div className="mt-2 space-y-3">
+                      {Object.keys(extraction.labeled_figures || {}).length > 0 ? (
+                        <div>
+                          <p className="mb-1 text-xs font-semibold text-slate-500">Key Figures</p>
+                          <div className="grid grid-cols-2 gap-2">
+                            {Object.entries(extraction.labeled_figures).map(([key, value]) => (
+                              <div key={key} className="rounded-xl border border-slate-200 bg-slate-50 p-2">
+                                <p className="text-[10px] uppercase tracking-wide text-slate-400">
+                                  {key.replace(/_/g, " ")}
+                                </p>
+                                <p className="text-sm font-semibold text-slate-800">{value}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {extraction.amounts?.length > 0 ? (
+                        <div>
+                          <p className="mb-1 text-xs font-semibold text-slate-500">
+                            All Amounts Found ({extraction.amounts.length})
+                          </p>
+                          <div className="max-h-40 space-y-1 overflow-y-auto">
+                            {extraction.amounts.map((a, idx) => (
+                              <p key={idx} className="text-xs text-slate-600">
+                                <span className="font-semibold">{a.label}</span>: {a.value}
+                              </p>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {extraction.dates?.length > 0 ? (
+                        <div>
+                          <p className="mb-1 text-xs font-semibold text-slate-500">Dates Found</p>
+                          <div className="flex flex-wrap gap-1">
+                            {extraction.dates.map((d, idx) => (
+                              <span
+                                key={idx}
+                                className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600"
+                              >
+                                {d}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <p className="text-[10px] text-slate-400">
+                        Last extracted {formatDate(extraction.extracted_at)} by {extraction.extracted_by_name}
+                      </p>
+                    </div>
+                  )
+                ) : (
+                  <p className="mt-2 text-sm text-slate-400">
+                    No extraction has been run for this file yet.
+                  </p>
+                )}
               </div>
 
               <div className="pt-2">
