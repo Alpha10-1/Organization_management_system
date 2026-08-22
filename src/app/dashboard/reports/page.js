@@ -15,6 +15,9 @@ import {
   fetchClientDashboard,
   fetchComplianceDashboard,
   fetchCapacityDashboard,
+  fetchCapacityForecast,
+  fetchCapacityForecastSummary,
+  fetchDepartments,
   fetchAtRiskEngagements,
   fetchTimeEntryAnomaliesReport,
   searchEngagements,
@@ -468,6 +471,231 @@ function CapacityDashboardPanel() {
           ))
         )}
       </div>
+    </div>
+  );
+}
+
+const CAPACITY_STATUS_STYLES = {
+  overbooked: "bg-rose-100 text-rose-700",
+  bench: "bg-slate-200 text-slate-600",
+  full: "bg-emerald-100 text-emerald-700",
+};
+
+const CAPACITY_STATUS_LABELS = {
+  overbooked: "Overbooked",
+  bench: "Bench",
+  full: "Full",
+};
+
+function formatMonthLabel(monthStr) {
+  if (!monthStr) return "";
+  const [year, month] = monthStr.split("-");
+  const date = new Date(Number(year), Number(month) - 1, 1);
+  return date.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+}
+
+function CapacityForecastPanel() {
+  const [departments, setDepartments] = useState([]);
+  const [departmentId, setDepartmentId] = useState("");
+  const [months, setMonths] = useState(12);
+  const [forecast, setForecast] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [expandedUserId, setExpandedUserId] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    fetchDepartments().then(setDepartments).catch(() => setDepartments([]));
+  }, []);
+
+  function load(currentMonths, currentDepartmentId) {
+    setLoading(true);
+    setError("");
+    const params = { months: currentMonths };
+    if (currentDepartmentId) params.department_id = currentDepartmentId;
+
+    Promise.all([fetchCapacityForecast(params), fetchCapacityForecastSummary(params)])
+      .then(([forecastData, summaryData]) => {
+        setForecast(forecastData);
+        setSummary(summaryData);
+      })
+      .catch((err) => setError(err.message || "Failed to load capacity forecast"))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    load(months, departmentId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const overbookedMonthCount = useMemo(
+    () => (summary ? summary.months.filter((m) => m.overbooked_count > 0).length : 0),
+    [summary]
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-slate-500">
+          Rolling forecast of committed vs. available hours per staff member, month by month —
+          the forward-looking companion to the point-in-time Capacity tab above. Built from
+          planned allocation on planning/active engagements, net of approved leave.
+        </p>
+        <div className="flex shrink-0 items-center gap-2">
+          <select
+            value={departmentId}
+            onChange={(e) => {
+              setDepartmentId(e.target.value);
+              load(months, e.target.value);
+            }}
+            className="rounded-xl border border-slate-300 px-3 py-2 text-xs outline-none focus:border-slate-900"
+          >
+            <option value="">All departments</option>
+            {departments.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
+              </option>
+            ))}
+          </select>
+          <select
+            value={months}
+            onChange={(e) => {
+              const value = Number(e.target.value);
+              setMonths(value);
+              load(value, departmentId);
+            }}
+            className="rounded-xl border border-slate-300 px-3 py-2 text-xs outline-none focus:border-slate-900"
+          >
+            <option value={3}>3 months</option>
+            <option value={6}>6 months</option>
+            <option value={12}>12 months</option>
+            <option value={18}>18 months</option>
+          </select>
+          <button
+            onClick={() => load(months, departmentId)}
+            className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+          >
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      {error ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+          {error}
+        </div>
+      ) : null}
+
+      {loading ? (
+        <p className="text-sm text-slate-500">Loading...</p>
+      ) : (
+        <>
+          {summary && summary.months.length > 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs text-slate-500">
+                Months with at least one overbooked person in this horizon
+              </p>
+              <p className="mt-1 text-2xl font-bold text-rose-600">
+                {overbookedMonthCount} / {summary.months.length}
+              </p>
+            </div>
+          ) : null}
+
+          {forecast.length === 0 ? (
+            <p className="text-sm text-slate-400">No active staff members to forecast.</p>
+          ) : (
+            <div className="space-y-2">
+              {forecast.map((person) => {
+                const expanded = expandedUserId === person.user_id;
+                const overbookedMonths = person.months.filter((m) => m.status === "overbooked").length;
+                const benchMonths = person.months.filter((m) => m.status === "bench").length;
+
+                return (
+                  <div key={person.user_id} className="rounded-xl border border-slate-200 bg-white p-3 text-sm">
+                    <button
+                      onClick={() => setExpandedUserId(expanded ? null : person.user_id)}
+                      className="flex w-full items-center justify-between gap-3 text-left"
+                    >
+                      <div>
+                        <p className="font-medium text-slate-800">
+                          {person.user_name}
+                          {person.position ? (
+                            <span className="ml-2 text-xs font-normal text-slate-400">
+                              {person.position.replaceAll("_", " ")}
+                            </span>
+                          ) : null}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {person.department_name || "Unassigned department"} ·{" "}
+                          {Number(person.standard_weekly_hours)}h/week baseline
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {overbookedMonths > 0 ? (
+                          <span className="rounded-full bg-rose-100 px-2.5 py-0.5 text-[10px] font-semibold text-rose-700">
+                            {overbookedMonths} overbooked mo.
+                          </span>
+                        ) : null}
+                        {benchMonths > 0 ? (
+                          <span className="rounded-full bg-slate-200 px-2.5 py-0.5 text-[10px] font-semibold text-slate-600">
+                            {benchMonths} bench mo.
+                          </span>
+                        ) : null}
+                        <span className="text-xs text-slate-400">{expanded ? "Hide" : "Show"} months</span>
+                      </div>
+                    </button>
+
+                    {expanded ? (
+                      <div className="mt-3 overflow-x-auto">
+                        <table className="w-full min-w-max text-left text-xs">
+                          <thead>
+                            <tr className="text-slate-400">
+                              <th className="pb-2 pr-4 font-medium">Month</th>
+                              <th className="pb-2 pr-4 font-medium">Allocated</th>
+                              <th className="pb-2 pr-4 font-medium">Capacity hrs</th>
+                              <th className="pb-2 pr-4 font-medium">Leave hrs</th>
+                              <th className="pb-2 pr-4 font-medium">Available hrs</th>
+                              <th className="pb-2 pr-4 font-medium">Status</th>
+                              <th className="pb-2 font-medium">Engagements</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {person.months.map((m) => (
+                              <tr key={m.month} className="border-t border-slate-100">
+                                <td className="py-2 pr-4 text-slate-700">{formatMonthLabel(m.month)}</td>
+                                <td className="py-2 pr-4 text-slate-700">{m.allocated_percent}%</td>
+                                <td className="py-2 pr-4 text-slate-700">{Number(m.capacity_hours).toFixed(1)}</td>
+                                <td className="py-2 pr-4 text-slate-700">{Number(m.leave_hours).toFixed(1)}</td>
+                                <td
+                                  className={`py-2 pr-4 ${
+                                    Number(m.available_hours) < 0 ? "text-rose-600" : "text-slate-700"
+                                  }`}
+                                >
+                                  {Number(m.available_hours).toFixed(1)}
+                                </td>
+                                <td className="py-2 pr-4">
+                                  <span
+                                    className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold ${CAPACITY_STATUS_STYLES[m.status]}`}
+                                  >
+                                    {CAPACITY_STATUS_LABELS[m.status]}
+                                  </span>
+                                </td>
+                                <td className="py-2 text-slate-500">
+                                  {m.project_names.length > 0 ? m.project_names.join(", ") : "—"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -958,6 +1186,16 @@ export default function ReportsPage() {
             Capacity
           </button>
           <button
+            onClick={() => setDashboardTab("capacity-forecast")}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              dashboardTab === "capacity-forecast"
+                ? "bg-slate-900 text-white"
+                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+            }`}
+          >
+            Capacity Forecast
+          </button>
+          <button
             onClick={() => setDashboardTab("at-risk")}
             className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
               dashboardTab === "at-risk" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
@@ -992,6 +1230,8 @@ export default function ReportsPage() {
             <ComplianceDashboardPanel />
           ) : dashboardTab === "capacity" ? (
             <CapacityDashboardPanel />
+          ) : dashboardTab === "capacity-forecast" ? (
+            <CapacityForecastPanel />
           ) : dashboardTab === "at-risk" ? (
             <AtRiskEngagementsPanel />
           ) : dashboardTab === "time-anomalies" ? (

@@ -845,3 +845,30 @@ export const searchEngagements = (q) => apiGet(`/search/engagements?q=${encodeUR
 
 export const extractFileDocument = (fileId) => apiSend(`/files/${fileId}/extract`, "POST");
 export const fetchFileExtraction = (fileId) => apiGet(`/files/${fileId}/extraction`);
+
+// --- Q4: Capacity forecasting --------------------------------------------------------
+
+export function fetchCapacityForecast(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.months != null) searchParams.append("months", params.months);
+  if (params.department_id != null) searchParams.append("department_id", params.department_id);
+  if (params.user_id != null) searchParams.append("user_id", params.user_id);
+  if (params.start_date) searchParams.append("start_date", params.start_date);
+  const qs = searchParams.toString();
+  return apiGet(`/capacity/forecast${qs ? `?${qs}` : ""}`);
+}
+
+export function fetchCapacityForecastSummary(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.months != null) searchParams.append("months", params.months);
+  if (params.department_id != null) searchParams.append("department_id", params.department_id);
+  if (params.start_date) searchParams.append("start_date", params.start_date);
+  const qs = searchParams.toString();
+  return apiGet(`/capacity/forecast/summary${qs ? `?${qs}` : ""}`);
+}
+
+export const updateUserWeeklyHours = (email, standardWeeklyHours) =>
+  apiSend(`/users/${encodeURIComponent(email)}/weekly-hours`, "PATCH", {
+    standard_weekly_hours: standardWeeklyHours,
+  });
+

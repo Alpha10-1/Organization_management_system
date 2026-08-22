@@ -6,6 +6,7 @@ from app.core.config import settings
 from app.core.seed import seed_demo_users
 from app.db.session import Base, SessionLocal, engine
 from app.routes.auth import router as auth_router
+from app.routes.capacity import router as capacity_router
 from app.routes.change_orders import router as change_orders_router
 from app.routes.clients import router as clients_router
 from app.routes.comments import router as comments_router
@@ -85,6 +86,7 @@ app.include_router(portal_users_router)
 app.include_router(portal_auth_router)
 app.include_router(portal_router)
 app.include_router(esign_router)
+app.include_router(capacity_router)
 
 @app.get("/")
 async def root():

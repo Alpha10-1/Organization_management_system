@@ -42,6 +42,14 @@ class User(Base):
     # over this for rate resolution -- see app.core.billing.
     standard_billing_rate = Column(Numeric(10, 2), nullable=True)
 
+    # Baseline hours/week this person is expected to be available for
+    # billable + internal work. Used purely for capacity forecasting (see
+    # app.core.capacity_forecast) to turn assignment allocation_percent
+    # figures into actual hour counts and over/under-booking signals.
+    # Defaults to a standard full-time week; overridable for part-time
+    # staff.
+    standard_weekly_hours = Column(Numeric(5, 2), nullable=False, default=40)
+
     # Email verification
     is_verified = Column(Boolean, nullable=False, default=False)
     verification_token = Column(String(255), nullable=True, index=True)

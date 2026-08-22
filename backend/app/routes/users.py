@@ -16,6 +16,7 @@ from app.schemas.user_management import (
     UserRoleUpdate,
     UserStatusUpdate,
     UserUpdate,
+    UserWeeklyHoursUpdate,
 )
 
 router = APIRouter(prefix="/users", tags=["Users"])
@@ -266,6 +267,48 @@ def update_user_billing_rate(
         entity_id=target.id,
         title=f"Billing rate updated: {target.name}",
         description=f"Set standard billing rate to {target.standard_billing_rate} for '{target.email}'.",
+    )
+
+    return target
+
+
+@router.patch("/{email}/weekly-hours", response_model=UserManagementOut)
+def update_user_weekly_hours(
+    email: str,
+    payload: UserWeeklyHoursUpdate,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(require_role("admin")),
+):
+    """Sets the baseline hours/week this person is expected to be
+    available for -- used only by capacity forecasting (see
+    app.core.capacity_forecast) to turn allocation_percent into hour
+    counts. Defaults to a standard full-time week; override for
+    part-time staff so the forecast doesn't overstate their capacity.
+    """
+    target = get_user_by_email(db, email.lower())
+
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if payload.standard_weekly_hours <= 0 or payload.standard_weekly_hours > 168:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="standard_weekly_hours must be greater than 0 and at most 168 (hours in a week)",
+        )
+
+    target.standard_weekly_hours = payload.standard_weekly_hours
+
+    db.commit()
+    db.refresh(target)
+
+    log_activity(
+        db=db,
+        user=current_user,
+        action="user_weekly_hours_updated",
+        entity_type="user",
+        entity_id=target.id,
+        title=f"Weekly hours updated: {target.name}",
+        description=f"Set standard weekly hours to {target.standard_weekly_hours} for '{target.email}'.",
     )
 
     return target

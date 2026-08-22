@@ -35,6 +35,9 @@ class UserPositionUpdate(BaseModel):
 class UserBillingRateUpdate(BaseModel):
     standard_billing_rate: Decimal | None = None
 
+class UserWeeklyHoursUpdate(BaseModel):
+    standard_weekly_hours: Decimal
+
 class UserManagementOut(BaseModel):
     id: int
     name: str
@@ -46,5 +49,6 @@ class UserManagementOut(BaseModel):
     manager_id: int | None = None
     is_verified: bool = False
     standard_billing_rate: Decimal | None = None
+    standard_weekly_hours: Decimal
 
     model_config = {"from_attributes": True}
