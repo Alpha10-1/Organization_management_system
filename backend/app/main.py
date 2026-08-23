@@ -26,6 +26,8 @@ from app.routes.portal_users import router as portal_users_router
 from app.routes.projects import router as projects_router
 from app.routes.protected import router as protected_router
 from app.routes.reports import router as reports_router
+from app.routes.prospects import router as prospects_router
+from app.routes.proposals import router as proposals_router
 from app.routes.resource_requests import router as resource_requests_router
 from app.routes.search import router as search_router
 from app.routes.skills import router as skills_router
@@ -87,6 +89,8 @@ app.include_router(portal_auth_router)
 app.include_router(portal_router)
 app.include_router(esign_router)
 app.include_router(capacity_router)
+app.include_router(prospects_router)
+app.include_router(proposals_router)
 
 @app.get("/")
 async def root():

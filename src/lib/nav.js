@@ -10,6 +10,7 @@ import {
   Award,
   CalendarClock,
   Repeat,
+  TrendingUp,
 } from "lucide-react";
 
 export const navItems = [
@@ -29,6 +30,12 @@ export const navItems = [
     label: "Projects",
     href: "/dashboard/projects",
     icon: Briefcase,
+    roles: ["admin", "staff"],
+  },
+  {
+    label: "Pipeline",
+    href: "/dashboard/pipeline",
+    icon: TrendingUp,
     roles: ["admin", "staff"],
   },
   {

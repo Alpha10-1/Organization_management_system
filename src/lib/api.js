@@ -872,3 +872,45 @@ export const updateUserWeeklyHours = (email, standardWeeklyHours) =>
     standard_weekly_hours: standardWeeklyHours,
   });
 
+// --- Q4: CRM / Pipeline ----------------------------------------------------------
+
+export function fetchProspects(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.status) searchParams.append("status", params.status);
+  if (params.department_id != null) searchParams.append("department_id", params.department_id);
+  if (params.assigned_to_user_id != null) searchParams.append("assigned_to_user_id", params.assigned_to_user_id);
+  if (params.source) searchParams.append("source", params.source);
+  const qs = searchParams.toString();
+  return apiGet(`/prospects/${qs ? `?${qs}` : ""}`);
+}
+
+export const fetchPipelineSummary = (params = {}) => {
+  const searchParams = new URLSearchParams();
+  if (params.department_id != null) searchParams.append("department_id", params.department_id);
+  const qs = searchParams.toString();
+  return apiGet(`/prospects/pipeline-summary${qs ? `?${qs}` : ""}`);
+};
+
+export const fetchProspect = (id) => apiGet(`/prospects/${id}`);
+export const createProspect = (payload) => apiSend("/prospects/", "POST", payload);
+export const updateProspect = (id, payload) => apiSend(`/prospects/${id}`, "PUT", payload);
+export const updateProspectStatus = (id, status, notes) =>
+  apiSend(`/prospects/${id}/status`, "PATCH", { status, notes });
+export const fetchProspectStageHistory = (id) => apiGet(`/prospects/${id}/stage-history`);
+export const convertProspect = (id, payload = {}) => apiSend(`/prospects/${id}/convert`, "POST", payload);
+export const deleteProspect = (id) => apiDelete(`/prospects/${id}`);
+
+export function fetchProposals(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.prospect_id != null) searchParams.append("prospect_id", params.prospect_id);
+  if (params.status) searchParams.append("status", params.status);
+  const qs = searchParams.toString();
+  return apiGet(`/proposals/${qs ? `?${qs}` : ""}`);
+}
+
+export const createProposal = (payload) => apiSend("/proposals/", "POST", payload);
+export const updateProposal = (id, payload) => apiSend(`/proposals/${id}`, "PUT", payload);
+export const updateProposalStatus = (id, status, notes) =>
+  apiSend(`/proposals/${id}/status`, "PATCH", { status, notes });
+export const deleteProposal = (id) => apiDelete(`/proposals/${id}`);
+
