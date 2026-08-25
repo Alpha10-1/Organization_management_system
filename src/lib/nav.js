@@ -11,6 +11,7 @@ import {
   CalendarClock,
   Repeat,
   TrendingUp,
+  BookOpen,
 } from "lucide-react";
 
 export const navItems = [
@@ -36,6 +37,12 @@ export const navItems = [
     label: "Pipeline",
     href: "/dashboard/pipeline",
     icon: TrendingUp,
+    roles: ["admin", "staff"],
+  },
+  {
+    label: "Knowledge Base",
+    href: "/dashboard/knowledge-base",
+    icon: BookOpen,
     roles: ["admin", "staff"],
   },
   {

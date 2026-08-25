@@ -914,3 +914,19 @@ export const updateProposalStatus = (id, status, notes) =>
   apiSend(`/proposals/${id}/status`, "PATCH", { status, notes });
 export const deleteProposal = (id) => apiDelete(`/proposals/${id}`);
 
+// --- Q4: Knowledge Base ------------------------------------------------------------
+
+export function fetchKnowledgeBase(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.q) searchParams.append("q", params.q);
+  if (params.engagement_type) searchParams.append("engagement_type", params.engagement_type);
+  if (params.industry) searchParams.append("industry", params.industry);
+  if (params.compliance_flag) searchParams.append("compliance_flag", params.compliance_flag);
+  if (params.risk_level) searchParams.append("risk_level", params.risk_level);
+  if (params.client_id != null) searchParams.append("client_id", params.client_id);
+  const qs = searchParams.toString();
+  return apiGet(`/knowledge-base/${qs ? `?${qs}` : ""}`);
+}
+
+export const fetchKnowledgeBaseFacets = () => apiGet("/knowledge-base/facets");
+
