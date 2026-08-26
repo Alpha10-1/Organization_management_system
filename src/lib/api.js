@@ -930,3 +930,13 @@ export function fetchKnowledgeBase(params = {}) {
 
 export const fetchKnowledgeBaseFacets = () => apiGet("/knowledge-base/facets");
 
+// --- Q4: RBAC / Roles --------------------------------------------------------------
+
+export const fetchRoles = () => apiGet("/roles/");
+export const fetchRolePermissionCatalog = () => apiGet("/roles/catalog");
+export const createRole = (payload) => apiSend("/roles/", "POST", payload);
+export const updateRole = (id, payload) => apiSend(`/roles/${id}`, "PUT", payload);
+export const deleteRole = (id) => apiDelete(`/roles/${id}`);
+export const updateUserCustomRole = (email, customRoleId) =>
+  apiSend(`/users/${encodeURIComponent(email)}/custom-role`, "PATCH", { custom_role_id: customRoleId });
+

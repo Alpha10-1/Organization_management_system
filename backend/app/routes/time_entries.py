@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user, get_user_by_email
+from app.core.permissions import user_has_permission
 from app.core.time import utcnow
 from app.core.time_anomaly import detect_time_entry_anomalies
 from app.db.session import get_db
@@ -27,16 +28,18 @@ router = APIRouter(prefix="/time-entries", tags=["Time Tracking"])
 DEFAULT_PAGE_LIMIT = 100
 MAX_PAGE_LIMIT = 500
 
-# Only admins log time on someone else's behalf, mirroring the existing
-# admin/staff role split used throughout the rest of the app.
-MANAGE_OTHERS_ROLES = ("admin",)
+# Admins, or a staff member with the delegated "time_entries.manage_others"
+# permission, may log time on someone else's behalf or view/edit their
+# entries.
+def _can_manage_others_time(db: Session, current_user: UserPublic) -> bool:
+    return user_has_permission(db, current_user, "time_entries.manage_others")
 
 
 def _resolve_owner(db: Session, payload_email: str | None, current_user: UserPublic) -> tuple[str, str]:
     if not payload_email or payload_email.lower() == current_user.email.lower():
         return current_user.email, current_user.name
 
-    if current_user.role not in MANAGE_OTHERS_ROLES:
+    if not _can_manage_others_time(db, current_user):
         raise HTTPException(
             status_code=403,
             detail="You do not have permission to log time on behalf of another user",
@@ -192,7 +195,9 @@ def list_time_entry_anomalies(
     for partner review and audit-quality controls, not an accusation
     engine. Non-admins are limited to their own entries; admins can filter
     by any project/user."""
-    if current_user.role != "admin" and (user_email is None or user_email.lower() != current_user.email.lower()):
+    if not _can_manage_others_time(db, current_user) and (
+        user_email is None or user_email.lower() != current_user.email.lower()
+    ):
         user_email = current_user.email
 
     if project_id is not None:
@@ -224,7 +229,7 @@ def update_time_entry(
     if not entry:
         raise HTTPException(status_code=404, detail="Time entry not found")
 
-    if entry.user_email != current_user.email and current_user.role not in MANAGE_OTHERS_ROLES:
+    if entry.user_email != current_user.email and not _can_manage_others_time(db, current_user):
         raise HTTPException(status_code=403, detail="You can only edit your own time entries")
 
     updates = payload.model_dump(exclude_unset=True)
@@ -255,7 +260,7 @@ def delete_time_entry(
     if not entry:
         raise HTTPException(status_code=404, detail="Time entry not found")
 
-    if entry.user_email != current_user.email and current_user.role not in MANAGE_OTHERS_ROLES:
+    if entry.user_email != current_user.email and not _can_manage_others_time(db, current_user):
         raise HTTPException(status_code=403, detail="You can only delete your own time entries")
 
     entry.deleted_at = utcnow()

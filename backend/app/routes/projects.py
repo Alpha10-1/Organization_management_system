@@ -8,6 +8,7 @@ from app.core.deps import get_current_active_user, get_user_by_email
 from app.core.department_scope import department_id_for_client, department_id_for_project, require_scoped_write
 from app.core.engagement_health import compute_engagement_health
 from app.core.independence import check_conflicts
+from app.core.permissions import user_has_permission
 from app.core.risk_prediction import TREND_LOOKBACK_DAYS_DEFAULT, get_risk_forecast
 from app.core.time import utcnow
 from app.db.session import get_db
@@ -684,7 +685,7 @@ def add_project_assignment(
                         ],
                     },
                 )
-            if current_user.role != "admin":
+            if not user_has_permission(db, current_user, "independence.override"):
                 raise HTTPException(
                     status_code=403,
                     detail="Only an admin can override an independence conflict when staffing this engagement",

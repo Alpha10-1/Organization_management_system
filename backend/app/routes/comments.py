@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user, get_user_by_email
 from app.core.notify import notify
+from app.core.permissions import user_has_permission
 from app.core.time import utcnow
 from app.db.session import get_db
 from app.models.comment import Comment
@@ -82,7 +83,7 @@ def delete_comment(
     if not comment:
         raise HTTPException(status_code=404, detail="Comment not found")
 
-    if comment.author_email != current_user.email and current_user.role != "admin":
+    if comment.author_email != current_user.email and not user_has_permission(db, current_user, "content.moderate"):
         raise HTTPException(status_code=403, detail="You can only delete your own comments")
 
     comment.deleted_at = utcnow()

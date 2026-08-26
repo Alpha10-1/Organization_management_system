@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user
 from app.core.independence import check_conflicts
+from app.core.permissions import user_has_permission
 from app.core.time import utcnow
 from app.db.session import get_db
 from app.models.client import Client
@@ -59,7 +60,7 @@ def list_disclosures(
     their own disclosures, regardless of what user_id is passed."""
     query = db.query(IndependenceDisclosure).filter(IndependenceDisclosure.deleted_at.is_(None))
 
-    if current_user.role != "admin":
+    if not user_has_permission(db, current_user, "independence.override"):
         query = query.filter(IndependenceDisclosure.user_id == current_user.id)
     elif user_id is not None:
         query = query.filter(IndependenceDisclosure.user_id == user_id)
@@ -84,7 +85,7 @@ def create_disclosure(
         raise HTTPException(status_code=400, detail=f"Invalid disclosure_type. Must be one of: {sorted(VALID_TYPES)}")
 
     target_user_id = payload.user_id or current_user.id
-    if target_user_id != current_user.id and current_user.role != "admin":
+    if target_user_id != current_user.id and not user_has_permission(db, current_user, "independence.override"):
         raise HTTPException(status_code=403, detail="Only an admin can log a disclosure on someone else's behalf")
 
     user = db.query(User).filter(User.id == target_user_id).first()
@@ -136,7 +137,7 @@ def update_disclosure(
     if not disclosure:
         raise HTTPException(status_code=404, detail="Disclosure not found")
 
-    if disclosure.user_id != current_user.id and current_user.role != "admin":
+    if disclosure.user_id != current_user.id and not user_has_permission(db, current_user, "independence.override"):
         raise HTTPException(status_code=403, detail="You can only update your own disclosures")
 
     updates = payload.model_dump(exclude_unset=True)
@@ -186,7 +187,7 @@ def delete_disclosure(
     if not disclosure:
         raise HTTPException(status_code=404, detail="Disclosure not found")
 
-    if disclosure.user_id != current_user.id and current_user.role != "admin":
+    if disclosure.user_id != current_user.id and not user_has_permission(db, current_user, "independence.override"):
         raise HTTPException(status_code=403, detail="You can only remove your own disclosures")
 
     disclosure.deleted_at = utcnow()
@@ -266,7 +267,7 @@ def create_override(
     passing conflict_override_reason to POST /projects/{id}/assignments,
     which calls the same logic inline so the override and the assignment
     it enables are created atomically."""
-    if current_user.role != "admin":
+    if not user_has_permission(db, current_user, "independence.override"):
         raise HTTPException(status_code=403, detail="Only an admin can override an independence conflict")
 
     project = db.query(Project).filter(Project.id == payload.project_id, Project.deleted_at.is_(None)).first()

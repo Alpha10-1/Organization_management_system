@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user, require_department_manage, require_role
+from app.core.permissions import require_permission
 from app.db.session import get_db
 from app.models.client import Client
 from app.models.contract import Contract
@@ -79,7 +80,7 @@ def get_department_detail(
 def create_department(
     payload: DepartmentCreate,
     db: Session = Depends(get_db),
-    current_user: UserPublic = Depends(require_role("admin")),
+    current_user: UserPublic = Depends(require_permission("departments.manage")),
 ):
     if db.query(Department).filter(Department.name == payload.name).first():
         raise HTTPException(status_code=400, detail="A department with this name already exists")
@@ -153,7 +154,7 @@ def update_department(
 def delete_department(
     department_id: int,
     db: Session = Depends(get_db),
-    current_user: UserPublic = Depends(require_role("admin")),
+    current_user: UserPublic = Depends(require_permission("departments.manage")),
 ):
     department = db.query(Department).filter(Department.id == department_id).first()
     if not department:

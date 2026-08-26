@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user
 from app.core.engagement_search import search_engagements
+from app.core.permissions import user_has_permission
 from app.db.session import get_db
 from app.models.client import Client
 from app.models.file_record import FileRecord
@@ -87,7 +88,7 @@ def global_search(
         ],
     }
 
-    if current_user.role == "admin":
+    if user_has_permission(db, current_user, "users.view"):
         users = (
             db.query(User)
             .filter(or_(User.name.ilike(term), User.email.ilike(term)))

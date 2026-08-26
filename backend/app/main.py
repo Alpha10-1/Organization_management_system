@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import app.db.base
 from app.core.config import settings
-from app.core.seed import seed_demo_users
+from app.core.seed import seed_default_roles, seed_demo_users
 from app.db.session import Base, SessionLocal, engine
 from app.routes.auth import router as auth_router
 from app.routes.capacity import router as capacity_router
@@ -29,6 +29,7 @@ from app.routes.reports import router as reports_router
 from app.routes.knowledge_base import router as knowledge_base_router
 from app.routes.prospects import router as prospects_router
 from app.routes.proposals import router as proposals_router
+from app.routes.roles import router as roles_router
 from app.routes.resource_requests import router as resource_requests_router
 from app.routes.search import router as search_router
 from app.routes.skills import router as skills_router
@@ -44,9 +45,11 @@ app = FastAPI(title="Organization Management System API")
 # Create database tables from registered models on startup
 Base.metadata.create_all(bind=engine)
 
-# Seed demo accounts on first run only (no-op if users already exist)
+# Seed demo accounts and default delegated-permission roles on first run
+# only (no-op if users/roles already exist)
 with SessionLocal() as db:
     seed_demo_users(db)
+    seed_default_roles(db)
 
 # Allowed origins come from CORS_ORIGINS (comma-separated) so this can be
 # tightened/loosened per deployment without a code change. Falls back to
@@ -93,6 +96,7 @@ app.include_router(capacity_router)
 app.include_router(prospects_router)
 app.include_router(proposals_router)
 app.include_router(knowledge_base_router)
+app.include_router(roles_router)
 
 @app.get("/")
 async def root():

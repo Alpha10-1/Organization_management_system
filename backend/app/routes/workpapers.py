@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user
 from app.core.department_scope import department_id_for_project, require_scoped_write
+from app.core.permissions import user_has_permission
 from app.core.time import utcnow
 from app.db.session import get_db
 from app.models.project import Project
@@ -215,7 +216,7 @@ def submit_for_review(
             status_code=400, detail=f"Workpaper must be in_preparation to submit for review (currently {workpaper.stage})"
         )
 
-    if current_user.id != workpaper.preparer_id and current_user.role != "admin":
+    if current_user.id != workpaper.preparer_id and not user_has_permission(db, current_user, "workpapers.override"):
         raise HTTPException(status_code=403, detail="Only the preparer or an admin can submit this workpaper for review")
 
     if payload.reviewer_id is not None:
@@ -270,7 +271,7 @@ def review_workpaper(
             status_code=400, detail=f"Workpaper must be pending_review to record a review decision (currently {workpaper.stage})"
         )
 
-    if current_user.id != workpaper.reviewer_id and current_user.role != "admin":
+    if current_user.id != workpaper.reviewer_id and not user_has_permission(db, current_user, "workpapers.override"):
         raise HTTPException(status_code=403, detail="Only the assigned reviewer or an admin can review this workpaper")
 
     if payload.status not in VALID_DECISIONS:
@@ -332,7 +333,7 @@ def partner_signoff(
             detail=f"Workpaper must be pending_partner_signoff for partner sign-off (currently {workpaper.stage})",
         )
 
-    if current_user.id != workpaper.partner_id and current_user.role != "admin":
+    if current_user.id != workpaper.partner_id and not user_has_permission(db, current_user, "workpapers.override"):
         raise HTTPException(status_code=403, detail="Only the assigned partner or an admin can sign off this workpaper")
 
     if payload.status not in VALID_DECISIONS:

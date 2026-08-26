@@ -3,9 +3,12 @@ from sqlalchemy.orm import Session
 
 from app.core.activity_logger import log_activity
 from app.core.deps import get_user_by_email, require_role
+from app.core.permissions import require_permission
 from app.core.security import get_password_hash
 from app.db.session import get_db
+from app.models.role import Role
 from app.models.user import POSITION_LEVELS, User
+from app.schemas.role import UserCustomRoleUpdate
 from app.schemas.user import UserPublic
 from app.schemas.user_management import (
     UserBillingRateUpdate,
@@ -95,7 +98,7 @@ def _guard_self_lockout(
 @router.get("/", response_model=list[UserManagementOut])
 def list_users(
     db: Session = Depends(get_db),
-    current_user: UserPublic = Depends(require_role("admin")),
+    current_user: UserPublic = Depends(require_permission("users.view")),
 ):
     return db.query(User).order_by(User.id).all()
 
@@ -104,7 +107,7 @@ def list_users(
 def create_user(
     payload: UserCreate,
     db: Session = Depends(get_db),
-    current_user: UserPublic = Depends(require_role("admin")),
+    current_user: UserPublic = Depends(require_permission("users.manage")),
 ):
     email = payload.email.lower()
 
@@ -118,6 +121,17 @@ def create_user(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid role",
+        )
+
+    # A user reaching this endpoint via a delegated "users.manage"
+    # permission (rather than being a real admin) must never be able to
+    # mint a new admin account -- that would be an unguarded privilege
+    # escalation path around the rule that system-role changes stay
+    # hard admin-only. Only an actual admin can create another admin.
+    if payload.role == "admin" and current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only an admin can create another admin account",
         )
 
     _validate_position(payload.position)
@@ -210,7 +224,7 @@ def update_user_position(
     email: str,
     payload: UserPositionUpdate,
     db: Session = Depends(get_db),
-    current_user: UserPublic = Depends(require_role("admin")),
+    current_user: UserPublic = Depends(require_permission("users.manage")),
 ):
     target = get_user_by_email(db, email.lower())
 
@@ -244,7 +258,7 @@ def update_user_billing_rate(
     email: str,
     payload: UserBillingRateUpdate,
     db: Session = Depends(get_db),
-    current_user: UserPublic = Depends(require_role("admin")),
+    current_user: UserPublic = Depends(require_permission("users.manage")),
 ):
     """Sets the standard hourly rate used to value this user's time when a
     project's contract doesn't itself carry an hourly_rate -- see
@@ -277,7 +291,7 @@ def update_user_weekly_hours(
     email: str,
     payload: UserWeeklyHoursUpdate,
     db: Session = Depends(get_db),
-    current_user: UserPublic = Depends(require_role("admin")),
+    current_user: UserPublic = Depends(require_permission("users.manage")),
 ):
     """Sets the baseline hours/week this person is expected to be
     available for -- used only by capacity forecasting (see
@@ -317,7 +331,7 @@ def update_user_weekly_hours(
 @router.get("/org-chart")
 def get_org_chart(
     db: Session = Depends(get_db),
-    current_user: UserPublic = Depends(require_role("admin")),
+    current_user: UserPublic = Depends(require_permission("users.view")),
 ):
     """Firm-wide reporting-line tree: every user with no manager at the
     top, their direct reports nested underneath. Built in-memory from a
@@ -385,7 +399,7 @@ def update_user_status(
     email: str,
     payload: UserStatusUpdate,
     db: Session = Depends(get_db),
-    current_user: UserPublic = Depends(require_role("admin")),
+    current_user: UserPublic = Depends(require_permission("users.manage_status")),
 ):
     target = get_user_by_email(db, email.lower())
 
@@ -417,7 +431,7 @@ def update_user_department(
     email: str,
     payload: UserDepartmentUpdate,
     db: Session = Depends(get_db),
-    current_user: UserPublic = Depends(require_role("admin")),
+    current_user: UserPublic = Depends(require_permission("users.manage")),
 ):
     target = get_user_by_email(db, email.lower())
 
@@ -437,6 +451,46 @@ def update_user_department(
         entity_id=target.id,
         title=f"Department changed: {target.name}",
         description=f"Updated department for '{target.email}'.",
+    )
+
+    return target
+
+
+@router.patch("/{email}/custom-role", response_model=UserManagementOut)
+def update_user_custom_role(
+    email: str,
+    payload: UserCustomRoleUpdate,
+    db: Session = Depends(get_db),
+    current_user: UserPublic = Depends(require_role("admin")),
+):
+    """Assigns (or clears, with custom_role_id=None) the delegated-permissions
+    role granted to this user -- see app.models.role.Role and
+    app.core.permissions. Admin-only and not delegable through the
+    permission system itself: only an admin decides who holds elevated
+    authority, never another delegated role."""
+    target = get_user_by_email(db, email.lower())
+
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if payload.custom_role_id is not None:
+        role = db.query(Role).filter(Role.id == payload.custom_role_id, Role.deleted_at.is_(None)).first()
+        if not role:
+            raise HTTPException(status_code=404, detail="Role not found")
+
+    target.custom_role_id = payload.custom_role_id
+
+    db.commit()
+    db.refresh(target)
+
+    log_activity(
+        db=db,
+        user=current_user,
+        action="user_custom_role_updated",
+        entity_type="user",
+        entity_id=target.id,
+        title=f"Delegated role changed: {target.name}",
+        description=f"Set custom_role_id={target.custom_role_id} for '{target.email}'.",
     )
 
     return target

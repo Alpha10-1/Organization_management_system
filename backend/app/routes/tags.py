@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user, require_role
+from app.core.permissions import require_permission
 from app.db.session import get_db
 from app.models.client import Client
 from app.models.tag import ClientTag, Tag
@@ -41,7 +42,7 @@ def update_tag(
     tag_id: int,
     payload: TagUpdate,
     db: Session = Depends(get_db),
-    current_user: UserPublic = Depends(require_role("admin")),
+    current_user: UserPublic = Depends(require_permission("tags.manage")),
 ):
     tag = db.query(Tag).filter(Tag.id == tag_id).first()
     if not tag:
@@ -60,7 +61,7 @@ def update_tag(
 def delete_tag(
     tag_id: int,
     db: Session = Depends(get_db),
-    current_user: UserPublic = Depends(require_role("admin")),
+    current_user: UserPublic = Depends(require_permission("tags.manage")),
 ):
     tag = db.query(Tag).filter(Tag.id == tag_id).first()
     if not tag:

@@ -50,6 +50,13 @@ class User(Base):
     # staff.
     standard_weekly_hours = Column(Numeric(5, 2), nullable=False, default=40)
 
+    # Optional delegated-permissions role (see app.models.role.Role and
+    # app.core.permissions). Independent of the `role` column above --
+    # this grants a specific slice of admin-level capability without
+    # changing the user's base admin/staff tier. Only ever set by an
+    # admin (app.routes.roles).
+    custom_role_id = Column(Integer, ForeignKey("roles.id"), nullable=True, index=True)
+
     # Email verification
     is_verified = Column(Boolean, nullable=False, default=False)
     verification_token = Column(String(255), nullable=True, index=True)

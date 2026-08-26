@@ -14,6 +14,8 @@ import {
   updateUserDepartment,
   updateUserPosition,
   fetchOrgChart,
+  fetchRoles,
+  updateUserCustomRole,
 } from "@/lib/api";
 
 const POSITION_LEVELS = [
@@ -76,6 +78,8 @@ export default function UsersPage() {
   const [newDeptName, setNewDeptName] = useState("");
   const [deptSaving, setDeptSaving] = useState(false);
 
+  const [roles, setRoles] = useState([]);
+
   const [orgChart, setOrgChart] = useState([]);
   const [orgChartLoading, setOrgChartLoading] = useState(false);
   const [showOrgChart, setShowOrgChart] = useState(false);
@@ -104,6 +108,7 @@ export default function UsersPage() {
             const data = await fetchUsers();
             setUsers(data);
             fetchDepartments().then(setDepartments).catch(() => setDepartments([]));
+            fetchRoles().then(setRoles).catch(() => setRoles([]));
         }
         } catch (err) {
         setError(err.message || "Failed to load users");
@@ -176,6 +181,16 @@ export default function UsersPage() {
       await loadUsers();
     } catch (err) {
       setError(err.message || "Failed to update manager");
+    }
+  }
+
+  async function handleUserCustomRoleChange(email, customRoleId) {
+    try {
+      setError("");
+      await updateUserCustomRole(email, customRoleId ? Number(customRoleId) : null);
+      await loadUsers();
+    } catch (err) {
+      setError(err.message || "Failed to update delegated role");
     }
   }
 
@@ -378,6 +393,7 @@ export default function UsersPage() {
                 <th className="pb-2">Department</th>
                 <th className="pb-2">Position</th>
                 <th className="pb-2">Manager</th>
+                <th className="pb-2">Delegated Role</th>
                 <th className="pb-2">Status</th>
                 <th className="pb-2">Actions</th>
               </tr>
@@ -385,13 +401,13 @@ export default function UsersPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-sm text-slate-500">
+                  <td colSpan={9} className="py-8 text-center text-sm text-slate-500">
                     Loading users...
                   </td>
                 </tr>
               ) : users.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-sm text-slate-500">
+                  <td colSpan={9} className="py-8 text-center text-sm text-slate-500">
                     No users found.
                   </td>
                 </tr>
@@ -454,6 +470,20 @@ export default function UsersPage() {
                               {u.name}
                             </option>
                           ))}
+                      </select>
+                    </td>
+                    <td className="px-4 py-4">
+                      <select
+                        value={user.custom_role_id ?? ""}
+                        onChange={(e) => handleUserCustomRoleChange(user.email, e.target.value)}
+                        className="rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
+                      >
+                        <option value="">None</option>
+                        {roles.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name}
+                          </option>
+                        ))}
                       </select>
                     </td>
                     <td className="px-4 py-4">

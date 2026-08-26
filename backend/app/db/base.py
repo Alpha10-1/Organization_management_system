@@ -32,3 +32,4 @@ from app.models.risk_snapshot import EngagementRiskSnapshot
 from app.models.document_extraction import DocumentExtraction
 from app.models.prospect import Prospect, ProspectStageEvent
 from app.models.proposal import Proposal
+from app.models.role import Role

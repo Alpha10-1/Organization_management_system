@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user
+from app.core.permissions import user_has_permission
 from app.core.time import utcnow
 from app.db.session import get_db
 from app.models.leave_request import LeaveRequest
@@ -38,7 +39,7 @@ def list_leave_requests(
         query = query.filter(LeaveRequest.user_id == user_id)
     if approver_user_id is not None:
         query = query.filter(LeaveRequest.approver_user_id == approver_user_id)
-    if user_id is None and approver_user_id is None and current_user.role != "admin":
+    if user_id is None and approver_user_id is None and not user_has_permission(db, current_user, "leave.approve_any"):
         query = query.filter(
             (LeaveRequest.user_id == current_user.id) | (LeaveRequest.approver_user_id == current_user.id)
         )
@@ -105,8 +106,8 @@ def get_leave_request(
     return request
 
 
-def _require_approver(current_user: UserPublic, request: LeaveRequest) -> None:
-    if current_user.role != "admin" and current_user.id != request.approver_user_id:
+def _require_approver(db: Session, current_user: UserPublic, request: LeaveRequest) -> None:
+    if current_user.id != request.approver_user_id and not user_has_permission(db, current_user, "leave.approve_any"):
         raise HTTPException(status_code=403, detail="Only this request's approver or an admin can decide it")
 
 
@@ -123,7 +124,7 @@ def approve_leave_request(
     if request.status != "pending":
         raise HTTPException(status_code=400, detail="Only pending requests can be approved")
 
-    _require_approver(current_user, request)
+    _require_approver(db, current_user, request)
 
     request.status = "approved"
     request.decided_at = utcnow()
@@ -160,7 +161,7 @@ def reject_leave_request(
     if request.status != "pending":
         raise HTTPException(status_code=400, detail="Only pending requests can be rejected")
 
-    _require_approver(current_user, request)
+    _require_approver(db, current_user, request)
 
     request.status = "rejected"
     request.decided_at = utcnow()
@@ -184,7 +185,7 @@ def cancel_leave_request(
     request = db.query(LeaveRequest).filter(LeaveRequest.id == request_id, LeaveRequest.deleted_at.is_(None)).first()
     if not request:
         raise HTTPException(status_code=404, detail="Leave request not found")
-    if current_user.role != "admin" and current_user.id != request.user_id:
+    if current_user.id != request.user_id and not user_has_permission(db, current_user, "leave.approve_any"):
         raise HTTPException(status_code=403, detail="Only the requester or an admin can cancel this request")
     if request.status != "pending":
         raise HTTPException(status_code=400, detail="Only pending requests can be cancelled")

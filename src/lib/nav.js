@@ -12,6 +12,7 @@ import {
   Repeat,
   TrendingUp,
   BookOpen,
+  Lock,
 } from "lucide-react";
 
 export const navItems = [
@@ -91,6 +92,12 @@ export const navItems = [
     label: "Users",
     href: "/dashboard/users",
     icon: ShieldCheck,
+    roles: ["admin"],
+  },
+  {
+    label: "Roles & Permissions",
+    href: "/dashboard/roles",
+    icon: Lock,
     roles: ["admin"],
   },
 ];

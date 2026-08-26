@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.core.activity_logger import log_activity
 from app.core.deps import get_current_active_user
 from app.core.department_scope import require_scoped_write
+from app.core.permissions import user_has_permission
 from app.core.time import utcnow
 from app.db.session import get_db
 from app.core.client_health import compute_client_health
@@ -364,7 +365,7 @@ def delete_client_note(
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
 
-    if note.author_email != current_user.email and current_user.role != "admin":
+    if note.author_email != current_user.email and not user_has_permission(db, current_user, "content.moderate"):
         raise HTTPException(status_code=403, detail="You can only delete your own notes")
 
     note.deleted_at = utcnow()

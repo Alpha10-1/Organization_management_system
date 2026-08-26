@@ -50,5 +50,6 @@ class UserManagementOut(BaseModel):
     is_verified: bool = False
     standard_billing_rate: Decimal | None = None
     standard_weekly_hours: Decimal
+    custom_role_id: int | None = None
 
     model_config = {"from_attributes": True}
