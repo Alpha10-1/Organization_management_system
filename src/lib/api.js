@@ -639,6 +639,16 @@ export const deleteClientContact = (clientId, contactId) =>
   apiDelete(`/clients/${clientId}/contacts/${contactId}`);
 export const fetchClientHealth = (clientId) => apiGet(`/clients/${clientId}/health`);
 
+// --- Client portal access (staff-side invite/manage) -------------------------------
+
+export const fetchClientPortalUsers = (clientId) => apiGet(`/clients/${clientId}/portal-users`);
+export const invitePortalUser = (clientId, payload) =>
+  apiSend(`/clients/${clientId}/portal-users`, "POST", payload);
+export const updatePortalUser = (clientId, portalUserId, payload) =>
+  apiSend(`/clients/${clientId}/portal-users/${portalUserId}`, "PUT", payload);
+export const revokePortalUser = (clientId, portalUserId) =>
+  apiDelete(`/clients/${clientId}/portal-users/${portalUserId}`);
+
 // --- Contracts / SOWs ---------------------------------------------------------------
 
 export function fetchContracts(params = {}) {

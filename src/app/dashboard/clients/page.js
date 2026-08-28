@@ -21,6 +21,7 @@ import {
   deleteClientContact,
   fetchClientHealth,
 } from "@/lib/api";
+import PortalAccessPanel from "@/components/portal/PortalAccessPanel";
 
 const HEALTH_STYLES = {
   green: "bg-emerald-100 text-emerald-700",
@@ -880,6 +881,10 @@ export default function ClientsPage() {
                     </button>
                   </div>
                 </form>
+              </div>
+
+              <div className="mt-6 border-t border-slate-100 pt-4">
+                <PortalAccessPanel clientId={selectedClient.id} contacts={contacts} />
               </div>
             </div>
           ) : (

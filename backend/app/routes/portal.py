@@ -1,8 +1,10 @@
+import io
 import tempfile
 import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.activity_logger import log_activity
@@ -314,3 +316,64 @@ def list_engagement_files(
     query = db.query(FileRecord).filter(FileRecord.project_id == project_id, FileRecord.deleted_at.is_(None))
     response.headers["X-Total-Count"] = str(query.count())
     return query.order_by(FileRecord.created_at.desc()).all()
+
+
+@router.get("/files/{file_id}/download")
+def download_portal_file(
+    file_id: int,
+    db: Session = Depends(get_db),
+    portal_user: PortalUserPublic = Depends(get_current_active_portal_user),
+):
+    """The portal counterpart to GET /files/{id}/download. Ownership is
+    proven the same way as every other portal route: the file's project
+    must belong to this portal user's client. This covers both files staff
+    have shared onto the engagement and files the client previously
+    submitted themselves via a PBC upload -- both land in the same
+    FileRecord table scoped by project_id."""
+    record = (
+        db.query(FileRecord)
+        .filter(FileRecord.id == file_id, FileRecord.deleted_at.is_(None))
+        .first()
+    )
+    if not record or record.project_id is None:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    project = (
+        db.query(Project)
+        .filter(
+            Project.id == record.project_id,
+            Project.client_id == portal_user.client_id,
+            Project.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if not project:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if not storage.exists(record.stored_name):
+        raise HTTPException(status_code=404, detail="Stored file missing")
+
+    log_activity(
+        db=db,
+        user=portal_user,
+        action="file_downloaded",
+        entity_type="file",
+        entity_id=record.id,
+        title=f"Client downloaded file: {record.original_name}",
+        description=f"{portal_user.name} downloaded '{record.original_name}'.",
+    )
+
+    local_path = storage.local_path(record.stored_name)
+    if local_path is not None:
+        return FileResponse(
+            path=local_path,
+            filename=record.original_name,
+            media_type=record.file_type or "application/octet-stream",
+        )
+
+    data = storage.read_bytes(record.stored_name)
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type=record.file_type or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{record.original_name}"'},
+    )

@@ -241,3 +241,57 @@ def test_client_can_view_files_shared_on_their_engagement(admin_client, client):
     assert resp.json()[0]["original_name"] == "deliverable.pdf"
     assert "stored_name" not in resp.json()[0]
     assert "file_path" not in resp.json()[0]
+
+
+def test_client_can_download_file_shared_on_their_engagement(admin_client, client):
+    org_client = _portal_client(admin_client, client, "portal-files-b@example.com", "files-b@clientco.example.com")
+    project = _create_project(admin_client, org_client["id"])
+
+    admin_client.post(
+        "/files/upload",
+        files={"file": ("deliverable.pdf", b"%PDF-1.4 report", "application/pdf")},
+        data={"project_id": str(project["id"])},
+    )
+    file_id = client.get(f"/portal/engagements/{project['id']}/files").json()[0]["id"]
+
+    resp = client.get(f"/portal/files/{file_id}/download")
+    assert resp.status_code == 200
+    assert resp.content == b"%PDF-1.4 report"
+    assert "deliverable.pdf" in resp.headers.get("content-disposition", "")
+
+
+def test_client_can_download_own_pbc_submission(admin_client, client):
+    org_client = _portal_client(admin_client, client, "portal-files-c@example.com", "files-c@clientco.example.com")
+    project = _create_project(admin_client, org_client["id"])
+    pbc = _create_pbc_request(admin_client, project["id"], title="Bank statement")
+
+    upload = client.post(
+        f"/portal/pbc-requests/{pbc['id']}/upload",
+        files={"file": ("statement.pdf", b"%PDF-1.4 statement", "application/pdf")},
+    )
+    file_id = upload.json()["file_id"]
+
+    resp = client.get(f"/portal/files/{file_id}/download")
+    assert resp.status_code == 200
+    assert resp.content == b"%PDF-1.4 statement"
+
+
+def test_client_cannot_download_another_clients_file(admin_client, client):
+    _portal_client(admin_client, client, "portal-files-d@example.com", "files-d@clientco.example.com")
+
+    other_client = _create_client(admin_client, email="portal-files-e@example.com")
+    other_project = _create_project(admin_client, other_client["id"])
+    admin_client.post(
+        "/files/upload",
+        files={"file": ("private.pdf", b"%PDF-1.4 secret", "application/pdf")},
+        data={"project_id": str(other_project["id"])},
+    )
+    other_file_id = admin_client.get(f"/files/?project_id={other_project['id']}").json()[0]["id"]
+
+    resp = client.get(f"/portal/files/{other_file_id}/download")
+    assert resp.status_code == 404
+
+
+def test_unauthenticated_request_to_portal_file_download_401s(client):
+    resp = client.get("/portal/files/1/download")
+    assert resp.status_code == 401
